@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: instagestor_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d instagestor_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NODE_ENV: test
+      NEXT_TELEMETRY_DISABLED: 1
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/instagestor_test
+      APP_URL: http://127.0.0.1:3000
+      SESSION_SECRET: ci-only-session-secret-with-at-least-32-characters
+      TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      INSTAGRAM_PROVIDER: fake
+      ALLOW_FAKE_PROVIDER_IN_PRODUCTION: "false"
+      STORAGE_PROVIDER: local
+      LOCAL_STORAGE_PATH: /tmp/instagestor-ci-uploads
+      WORKER_CONCURRENCY: 3
+      MAX_PUBLICATION_ATTEMPTS: 5
+      ADMIN_EMAIL: admin@example.test
+      ADMIN_PASSWORD: ci-only-admin-password
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Fake provider load tests
+        run: pnpm test:load
+
+      - name: Migrate test database
+        run: pnpm db:migrate
+
+      - name: Integration tests
+        run: pnpm test:integration
+
+      - name: PostgreSQL queue load tests
+        run: pnpm test:load:db
+
+      - name: E2E browser dependencies
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        run: pnpm test:e2e
+
+      - name: Production build
+        run: pnpm build
+        env:
+          NODE_ENV: production
+          # Build-time fake opt-in; this CI job never starts a production service.
+          ALLOW_FAKE_PROVIDER_IN_PRODUCTION: "true"

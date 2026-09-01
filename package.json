@@ -3,25 +3,53 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "tsx --env-file-if-exists=.env scripts/dev.ts",
+    "dev:web": "next dev",
+    "dev:worker": "tsx --env-file-if-exists=.env watch worker/index.ts",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "worker": "tsx --env-file-if-exists=.env worker/index.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.mts",
+    "test:load": "vitest run --config vitest.load.config.mts",
+    "test:load:db": "vitest run --config vitest.db-load.config.mts",
+    "test:e2e": "playwright test",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx --env-file-if-exists=.env src/db/migrate.ts",
+    "db:seed": "tsx --env-file-if-exists=.env scripts/seed.ts",
+    "secret:session": "tsx scripts/generate-secret.ts session",
+    "secret:encryption": "tsx scripts/generate-secret.ts encryption"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1122.0",
+    "@aws-sdk/s3-request-presigner": "^3.1122.0",
+    "argon2": "^0.45.1",
+    "drizzle-orm": "^0.45.2",
+    "file-type": "^22.0.2",
+    "luxon": "^3.7.2",
     "next": "16.3.4",
+    "postgres": "^3.4.9",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "sharp": "^0.35.4",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
+    "@types/luxon": "^3.7.5",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "drizzle-kit": "^0.31.10",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "^4.23.13",
+    "typescript": "^5",
+    "vitest": "^4.1.11"
   },
   "packageManager": "pnpm@11.25.0"
 }

@@ -30,8 +30,23 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files (o exemplo sem segredos deve ser versionado)
 .env*
+!.env.example
+
+# local secrets and mutable data
+/secrets/
+/uploads/
+/cookies/
+/tokens/
+/minio-data/
+*.dump
+*.sql.gz
+
+# browser and test artifacts
+/playwright-report/
+/test-results/
+/blob-report/
 
 # vercel
 .vercel

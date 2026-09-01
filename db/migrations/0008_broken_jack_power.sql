@@ -1,0 +1,1 @@
+CREATE INDEX "audit_logs_deletion_event_idx" ON "audit_logs" USING btree (("metadata_json"->>'eventHash')) WHERE "audit_logs"."event_type" = 'DATA_DELETION_REQUESTED';

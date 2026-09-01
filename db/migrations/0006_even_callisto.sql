@@ -1,0 +1,1 @@
+ALTER TABLE "instagram_accounts" ADD COLUMN "authorized_at" timestamp with time zone DEFAULT now() NOT NULL;

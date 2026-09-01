@@ -1,0 +1,1 @@
+ALTER TABLE "publication_jobs" ADD COLUMN "meta_child_container_ids" text[];

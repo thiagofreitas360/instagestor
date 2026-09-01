@@ -1,0 +1,2 @@
+ALTER TABLE "instagram_accounts" ADD COLUMN "app_scoped_user_id" text;--> statement-breakpoint
+ALTER TABLE "instagram_accounts" ADD CONSTRAINT "instagram_accounts_app_scoped_user_id_unique" UNIQUE("app_scoped_user_id");

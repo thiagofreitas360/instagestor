@@ -1,0 +1,2 @@
+CREATE INDEX "audit_logs_deletion_confirmation_idx" ON "audit_logs" USING btree (("metadata_json"->>'confirmationCode')) WHERE "audit_logs"."event_type" = 'DATA_DELETION_REQUESTED';--> statement-breakpoint
+CREATE INDEX "audit_logs_deauthorization_event_idx" ON "audit_logs" USING btree (("metadata_json"->>'eventHash')) WHERE "audit_logs"."event_type" IN ('ACCOUNT_DEAUTHORIZED', 'ACCOUNT_DEAUTHORIZATION_IGNORED');

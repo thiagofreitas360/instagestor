@@ -1,0 +1,1 @@
+ALTER TABLE "campaigns" ALTER COLUMN "delay_fixed_seconds" SET DEFAULT 0;
