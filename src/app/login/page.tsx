@@ -14,11 +14,11 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <p className="eyebrow">Painel interno</p>
         <h1 id="login-title">Entrar no InstaGestor</h1>
         <p className="muted">Acesso exclusivo do administrador.</p>
-        {erro && <p className="alert error" role="alert">{erro}</p>}
-        <form action={loginAction} className="stack">
+        {erro && <p className="inline-error" role="alert">{erro}</p>}
+        <form action={loginAction} className="form-stack">
           <label>E-mail<input name="email" type="email" autoComplete="username" required /></label>
           <label>Senha<input name="password" type="password" autoComplete="current-password" minLength={8} required /></label>
-          <button type="submit" className="button primary">Entrar</button>
+          <button type="submit" className="button button-primary button-block">Entrar</button>
         </form>
       </section>
     </main>
