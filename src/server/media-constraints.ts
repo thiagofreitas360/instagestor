@@ -53,7 +53,6 @@ export function runFfprobe(temp: string, execute: FfprobeExecutor = execFile as 
     execute(
       "ffprobe",
       [
-        "-nostdin",
         "-v",
         "error",
         "-show_entries",
@@ -70,7 +69,11 @@ export function runFfprobe(temp: string, execute: FfprobeExecutor = execFile as 
         windowsHide: true,
         shell: false,
       },
-      (error, output) => (error ? reject(error) : resolve(output)),
+      (error, output) => (
+        error
+          ? reject(new Error("Não foi possível analisar o vídeo enviado", { cause: error }))
+          : resolve(output)
+      ),
     );
   });
 }
@@ -84,7 +87,7 @@ export async function inspectVideo(
   await writeFile(temp, data, { flag: "wx" });
   try {
     const stdout = await probeFile(temp);
-    const probe = JSON.parse(stdout) as {
+    let probe: {
       format?: { duration?: string; bit_rate?: string };
       streams?: Array<{
         codec_type?: string;
@@ -98,6 +101,11 @@ export async function inspectVideo(
         channels?: number;
       }>;
     };
+    try {
+      probe = JSON.parse(stdout) as typeof probe;
+    } catch {
+      throw new Error("Não foi possível interpretar os metadados do vídeo");
+    }
     const video = probe.streams?.find((stream) => stream.codec_type === "video");
     const audio = probe.streams?.find((stream) => stream.codec_type === "audio");
     if (!video || !["h264", "hevc"].includes(video.codec_name ?? "")) throw new Error("Vídeo deve usar codec H.264 ou HEVC");

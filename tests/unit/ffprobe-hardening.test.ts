@@ -19,7 +19,7 @@ const validProbe = JSON.stringify({
 });
 
 describe("ffprobe hardening", () => {
-  it("executa sem shell, limita tempo/saída e impede leitura de stdin", async () => {
+  it("executa sem shell, limita tempo/saída e usa somente o arquivo explícito", async () => {
     const execute = vi.fn((file, args, options, callback) => {
       callback(null, validProbe, "");
       return undefined;
@@ -30,7 +30,7 @@ describe("ffprobe hardening", () => {
     expect(execute).toHaveBeenCalledOnce();
     const [file, args, options] = execute.mock.calls[0]!;
     expect(file).toBe("ffprobe");
-    expect(args).toContain("-nostdin");
+    expect(args).not.toContain("-nostdin");
     expect(args.at(-1)).toBe("C:\\safe\\video.mp4");
     expect(options).toMatchObject({
       encoding: "utf8",
@@ -40,6 +40,17 @@ describe("ffprobe hardening", () => {
       windowsHide: true,
       shell: false,
     });
+  });
+
+  it("não devolve a saída técnica do ffprobe ao usuário", async () => {
+    const execute = vi.fn((file, args, options, callback) => {
+      callback(new Error("Command failed: ffprobe -- configuração interna extensa"), "", "");
+      return undefined;
+    });
+
+    const result = runFfprobe("C:\\safe\\video.mp4", execute);
+    await expect(result).rejects.toThrow("Não foi possível analisar o vídeo enviado");
+    await expect(result).rejects.not.toThrow("configuração interna extensa");
   });
 
   it("propaga timeout do processo e sempre remove o arquivo temporário", async () => {

@@ -22,7 +22,7 @@ function enableMetaEnvironment() {
 describe("parseMetaSignedRequest", () => {
   it("aceita uma assinatura HMAC-SHA256 autêntica e preserva o user_id app-scoped", () => {
     enableMetaEnvironment();
-    const issuedAt = 1_788_255_200;
+    const issuedAt = Math.floor(Date.now() / 1000);
 
     expect(
       parseMetaSignedRequest(signedRequest({ user_id: "app-scoped-42", algorithm: "HMAC-SHA256", issued_at: issuedAt })),
