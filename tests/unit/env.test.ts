@@ -49,4 +49,18 @@ describe("validação do ambiente", () => {
 
     expect(() => getEnv()).toThrow();
   });
+
+  it("usa defaults de sync de insights e valida limites", () => {
+    expect(getEnv().INSIGHTS_SYNC_INTERVAL_MS).toBe(3_600_000);
+    expect(getEnv().INSIGHTS_MEDIA_WINDOW_DAYS).toBe(30);
+
+    vi.stubEnv("INSIGHTS_SYNC_INTERVAL_MS", "1000");
+    resetEnvForTests();
+    expect(() => getEnv()).toThrow();
+
+    vi.stubEnv("INSIGHTS_SYNC_INTERVAL_MS", "600000");
+    vi.stubEnv("INSIGHTS_MEDIA_WINDOW_DAYS", "400");
+    resetEnvForTests();
+    expect(() => getEnv()).toThrow();
+  });
 });

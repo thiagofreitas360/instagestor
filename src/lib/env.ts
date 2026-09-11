@@ -47,6 +47,8 @@ const schema = z
     WORKER_POLL_MS: z.coerce.number().int().min(250).max(60000).default(5000),
     META_HTTP_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
     CONTAINER_POLL_SECONDS: z.coerce.number().int().min(1).max(300).default(60),
+    INSIGHTS_SYNC_INTERVAL_MS: z.coerce.number().int().min(300_000).max(86_400_000).default(3_600_000),
+    INSIGHTS_MEDIA_WINDOW_DAYS: z.coerce.number().int().min(3).max(365).default(30),
     PUBLISHABLE_URL_TTL_SECONDS: z.coerce.number().int().min(900).max(86400).default(7200),
     UPLOAD_MAX_BYTES: z.coerce.number().int().min(1).max(300_000_000).default(300_000_000),
     FAKE_PROVIDER_SCENARIO: z

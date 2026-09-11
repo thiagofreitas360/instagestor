@@ -71,6 +71,13 @@
       "when": 1788300824783,
       "tag": "0009_open_klaw",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789160585882,
+      "tag": "0010_thin_rockslide",
+      "breakpoints": true
     }
   ]
 }

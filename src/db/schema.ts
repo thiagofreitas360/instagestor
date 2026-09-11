@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   check,
+  date,
   index,
   integer,
   jsonb,
@@ -29,6 +30,7 @@ export const instagramAccountStatus = pgEnum("instagram_account_status", [
   "DISCONNECTED",
   "ERROR",
   "DISABLED",
+  "BANNED",
 ]);
 export const mediaKind = pgEnum("media_kind", ["IMAGE", "VIDEO"]);
 export const mediaProcessingStatus = pgEnum("media_processing_status", [
@@ -110,6 +112,13 @@ export const instagramAccounts = pgTable(
     publishingLimitUsage: integer("publishing_limit_usage"),
     publishingLimitTotal: integer("publishing_limit_total"),
     publishingLimitCheckedAt: timestamp("publishing_limit_checked_at", { withTimezone: true }),
+    grantedScopes: text("granted_scopes").array(),
+    biography: text("biography"),
+    website: text("website"),
+    insightsSyncedAt: timestamp("insights_synced_at", { withTimezone: true }),
+    insightsErrorCode: text("insights_error_code"),
+    bannedAt: timestamp("banned_at", { withTimezone: true }),
+    banReason: text("ban_reason"),
     ...timestamps,
     disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
   },
@@ -274,6 +283,77 @@ export const publicationJobs = pgTable(
     index("publication_jobs_campaign_idx").on(table.campaignId),
     index("publication_jobs_stale_lock_idx").on(table.lockExpiresAt),
     check("publication_jobs_attempts_valid", sql`${table.attemptCount} >= 0 AND ${table.maxAttempts} > 0`),
+  ],
+);
+
+export const accountDailyMetrics = pgTable(
+  "account_daily_metrics",
+  {
+    instagramAccountId: uuid("instagram_account_id")
+      .notNull()
+      .references(() => instagramAccounts.id, { onDelete: "restrict" }),
+    day: date("day").notNull(),
+    followersCount: integer("followers_count"),
+    followsCount: integer("follows_count"),
+    mediaCount: integer("media_count"),
+    followerGains: integer("follower_gains"),
+    reach: integer("reach"),
+    views: integer("views"),
+    profileViews: integer("profile_views"),
+    accountsEngaged: integer("accounts_engaged"),
+    totalInteractions: integer("total_interactions"),
+    likes: integer("likes"),
+    comments: integer("comments"),
+    shares: integer("shares"),
+    saves: integer("saves"),
+    replies: integer("replies"),
+    websiteClicks: integer("website_clicks"),
+    profileLinksTaps: integer("profile_links_taps"),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.instagramAccountId, table.day] }),
+    index("account_daily_metrics_day_idx").on(table.day),
+  ],
+);
+
+export const accountMedia = pgTable(
+  "account_media",
+  {
+    id: text("id").primaryKey(),
+    instagramAccountId: uuid("instagram_account_id")
+      .notNull()
+      .references(() => instagramAccounts.id, { onDelete: "restrict" }),
+    mediaType: text("media_type").notNull(),
+    productType: text("product_type").notNull(),
+    permalink: text("permalink"),
+    thumbnailUrl: text("thumbnail_url"),
+    caption: text("caption"),
+    postedAt: timestamp("posted_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    likeCount: integer("like_count"),
+    commentsCount: integer("comments_count"),
+    views: integer("views"),
+    reach: integer("reach"),
+    shares: integer("shares"),
+    saved: integer("saved"),
+    totalInteractions: integer("total_interactions"),
+    replies: integer("replies"),
+    follows: integer("follows"),
+    profileVisits: integer("profile_visits"),
+    reelsAvgWatchTimeMs: integer("reels_avg_watch_time_ms"),
+    reelsTotalWatchTimeMs: bigint("reels_total_watch_time_ms", { mode: "number" }),
+    storyTapsForward: integer("story_taps_forward"),
+    storyTapsBack: integer("story_taps_back"),
+    storyExits: integer("story_exits"),
+    insightsSyncedAt: timestamp("insights_synced_at", { withTimezone: true }),
+    publishedJobId: uuid("published_job_id").references(() => publicationJobs.id, { onDelete: "set null" }),
+    ...timestamps,
+  },
+  (table) => [
+    index("account_media_account_posted_idx").on(table.instagramAccountId, table.postedAt),
+    index("account_media_posted_idx").on(table.postedAt),
+    check("account_media_product_type_valid", sql`${table.productType} IN ('FEED', 'REELS', 'STORY')`),
   ],
 );
 

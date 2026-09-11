@@ -12,6 +12,8 @@ async function cleanTestDatabase() {
   assertActiveTestDatabase();
   await getSqlClient()`
     TRUNCATE TABLE
+      account_daily_metrics,
+      account_media,
       account_group_members,
       account_groups,
       audit_logs,
