@@ -1,9 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
 import { InstagramError } from "@/lib/errors";
 import { getEnv } from "@/lib/env";
-import type { ContainerInput, FakeScenario, InstagramProvider } from "./instagram";
+import type {
+  AccountDayInsights, AccountSnapshot, ContainerInput, FakeScenario, InstagramProvider,
+  MediaInsights, MediaProductType, MediaSummary,
+} from "./instagram";
 
 type FakeContainer = { id: string; readyAt: number };
+
+const DAY_MS = 86_400_000;
+
+function seeded(seed: string, max: number, min = 0) {
+  const hash = createHash("sha256").update(seed).digest();
+  return min + (hash.readUInt32BE(0) % (max - min + 1));
+}
 
 export class FakeInstagramProvider implements InstagramProvider {
   private transientFailures = 0;
@@ -71,5 +81,98 @@ export class FakeInstagramProvider implements InstagramProvider {
   async refreshAccessToken(accessToken: string) {
     this.fail("request");
     return { accessToken: `${accessToken.split(":refreshed")[0]}:refreshed`, expiresIn: 60 * 24 * 60 * 60 };
+  }
+
+  async getAccountSnapshot(accessToken: string): Promise<AccountSnapshot> {
+    this.fail("request");
+    const [, id = "1000", username = "conta_fake"] = accessToken.split(":");
+    const dayIndex = Math.floor(Date.now() / DAY_MS);
+    return {
+      username,
+      displayName: `Conta ${username}`,
+      followersCount: 100 + seeded(`${id}:base`, 5000) + dayIndex * seeded(`${id}:growth`, 25, 5),
+      followsCount: seeded(`${id}:follows`, 800, 50),
+      mediaCount: 30 + seeded(`${id}:media`, 200),
+      biography: `Bio da ${username}`,
+      website: `https://${username}.example`,
+    };
+  }
+
+  async getAccountInsights(accountId: string, accessToken: string, days: string[]): Promise<AccountDayInsights[]> {
+    void accessToken;
+    this.fail("request");
+    const small = seeded(`${accountId}:small`, 9) === 0;
+    return days.map((day) => {
+      const value = (name: string, max: number, min?: number) => seeded(`${accountId}:${day}:${name}`, max, min);
+      return {
+        day,
+        followerGains: small ? null : value("gains", 60),
+        reach: value("reach", 5000, 100),
+        views: value("views", 12000, 200),
+        profileViews: value("profile_views", 400),
+        accountsEngaged: value("engaged", 900),
+        totalInteractions: value("interactions", 1200),
+        likes: value("likes", 800),
+        comments: value("comments", 120),
+        shares: value("shares", 150),
+        saves: value("saves", 90),
+        replies: value("replies", 40),
+        websiteClicks: value("website", 60),
+        profileLinksTaps: value("links", 80),
+      };
+    });
+  }
+
+  async listRecentMedia(accountId: string, accessToken: string, since: Date): Promise<MediaSummary[]> {
+    void accessToken;
+    this.fail("request");
+    return Array.from({ length: 5 }, (_, position) => {
+      const reel = position % 2 === 0;
+      return {
+        id: `fake_media_${accountId}_${position}`,
+        mediaType: reel ? "VIDEO" : "IMAGE",
+        productType: (reel ? "REELS" : "FEED") as MediaProductType,
+        permalink: `https://www.instagram.com/p/fake_${accountId}_${position}/`,
+        caption: `Publicação ${position + 1} da conta ${accountId}`,
+        postedAt: new Date(Date.now() - (position * 5 + 1) * DAY_MS),
+        likeCount: seeded(`${accountId}:${position}:likes`, 500),
+        commentsCount: seeded(`${accountId}:${position}:comments`, 60),
+      };
+    }).filter((item) => item.postedAt >= since);
+  }
+
+  async listLiveStories(accountId: string, accessToken: string): Promise<MediaSummary[]> {
+    void accessToken;
+    this.fail("request");
+    const dayIndex = Math.floor(Date.now() / DAY_MS);
+    return [{
+      id: `fake_story_${accountId}_${dayIndex}`,
+      mediaType: "IMAGE",
+      productType: "STORY",
+      postedAt: new Date(Date.now() - 3_600_000),
+    }];
+  }
+
+  async getMediaInsights(mediaId: string, accessToken: string, productType: MediaProductType): Promise<MediaInsights> {
+    void accessToken;
+    this.fail("request");
+    const value = (name: string, max: number, min?: number) => seeded(`${mediaId}:${name}`, max, min);
+    const story = productType === "STORY";
+    const reel = productType === "REELS";
+    return {
+      views: value("views", 8000, 50),
+      reach: value("reach", 6000, 40),
+      shares: value("shares", 120),
+      saved: story ? null : value("saved", 200),
+      totalInteractions: value("interactions", 900),
+      replies: story ? value("replies", 30) : null,
+      follows: reel ? null : value("follows", 25),
+      profileVisits: reel ? null : value("visits", 80),
+      reelsAvgWatchTimeMs: reel ? value("avg_watch", 15000, 1000) : null,
+      reelsTotalWatchTimeMs: reel ? value("total_watch", 5_000_000, 10_000) : null,
+      storyTapsForward: story ? value("forward", 400) : null,
+      storyTapsBack: story ? value("back", 40) : null,
+      storyExits: story ? value("exits", 60) : null,
+    };
   }
 }
