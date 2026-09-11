@@ -31,7 +31,9 @@ describe("MetaInstagramProvider OAuth e ciclo do token", () => {
 
     expect(url.origin + url.pathname).toBe("https://www.instagram.com/oauth/authorize");
     expect(url.searchParams.get("state")).toBe("nonce-imprevisivel");
-    expect(url.searchParams.get("scope")).toBe("instagram_business_basic,instagram_business_content_publish");
+    expect(url.searchParams.get("scope")).toBe(
+      "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights",
+    );
     expect(url.searchParams.get("force_reauth")).toBe("true");
     expect(url.searchParams.get("redirect_uri")).toBe(process.env.INSTAGRAM_REDIRECT_URI);
   });
@@ -50,6 +52,7 @@ describe("MetaInstagramProvider OAuth e ciclo do token", () => {
       appScopedUserId: "app-scoped-7",
       accessToken: "longo",
       expiresIn: 5_184_000,
+      permissions: ["instagram_business_basic", "instagram_business_content_publish"],
     });
 
     const [exchangeUrl, exchangeInit] = mockedFetch.mock.calls[0];
