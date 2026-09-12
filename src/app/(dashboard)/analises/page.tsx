@@ -17,10 +17,10 @@ const MEDIA_TYPES = [
   ["", "Todas"], ["REELS", "Reels"], ["FEED", "Posts"], ["STORY", "Stories"],
 ] as const;
 
-const PRIMARY_CARDS: Array<{ label: string; key: keyof Totals; tone?: "success" | "danger" | "brand" }> = [
+const PRIMARY_CARDS: Array<{ label: string; key: keyof Totals; tone?: "success" | "danger" | "brand"; invert?: true }> = [
   { label: "Seguidores", key: "followers", tone: "brand" },
   { label: "Seguidores ganhos", key: "gains", tone: "success" },
-  { label: "Seguidores perdidos", key: "lost", tone: "danger" },
+  { label: "Seguidores perdidos", key: "lost", tone: "danger", invert: true },
   { label: "Variação líquida", key: "netChange" },
   { label: "Alcance", key: "reach" },
   { label: "Visualizações", key: "views" },
@@ -62,7 +62,11 @@ function shortDay(day: string) {
 }
 
 function minutesAgo(date: Date | null) {
-  return date ? Math.round((Date.now() - new Date(date).getTime()) / 60_000) : null;
+  return date ? Math.max(0, Math.round((Date.now() - new Date(date).getTime()) / 60_000)) : null;
+}
+
+function safeUrl(value: string | null | undefined) {
+  return value && /^https?:\/\//i.test(value) ? value : undefined;
 }
 
 function productLabel(productType: string) {
@@ -210,7 +214,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
             <StatusBadge status={selectedAccount.status} />
             <p>@{selectedAccount.username} · {formatNumber(selectedAccount.followers_count)} seguidores · {formatNumber(selectedAccount.follows_count)} seguindo · {formatNumber(selectedAccount.media_count)} publicações</p>
             {selectedAccount.biography ? <p className="muted">{selectedAccount.biography}</p> : null}
-            {selectedAccount.website ? <a className="text-link" href={selectedAccount.website} rel="noreferrer" target="_blank">{selectedAccount.website}</a> : null}
+            {safeUrl(selectedAccount.website) ? <a className="text-link" href={safeUrl(selectedAccount.website)} rel="noreferrer" target="_blank">{selectedAccount.website}</a> : null}
             <Link className="text-link" href={`/contas/${selectedAccount.id}`}>Ver detalhes operacionais</Link>
           </div>
         </section>
@@ -232,7 +236,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
                 label={card.label}
                 value={formatNumber(data.totals[card.key])}
                 tone={card.tone ?? "default"}
-                detail={<Delta value={deltaPercent(data.totals[card.key], data.previous[card.key])} />}
+                detail={<Delta value={deltaPercent(data.totals[card.key], data.previous[card.key])} invert={card.invert} />}
               />
             ))}
           </section>
@@ -328,10 +332,10 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
                     {data.media.map((row) => (
                       <tr key={row.id}>
                         <td data-label="Mídia">
-                          <a className="table-primary-link" href={row.permalink ?? "#"} rel="noreferrer" target="_blank">
-                            {row.thumbnail_url ? (
+                          <a className="table-primary-link" href={safeUrl(row.permalink) ?? "#"} rel="noreferrer" target="_blank">
+                            {safeUrl(row.thumbnail_url) ? (
                               // eslint-disable-next-line @next/next/no-img-element
-                              <img className="media-thumb-small" src={row.thumbnail_url} alt="" referrerPolicy="no-referrer" />
+                              <img className="media-thumb-small" src={safeUrl(row.thumbnail_url)} alt="" referrerPolicy="no-referrer" />
                             ) : null}
                             <span className="cell-wrap">{row.caption?.slice(0, 60) || row.id}</span>
                           </a>

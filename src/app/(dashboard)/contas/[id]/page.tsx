@@ -195,11 +195,13 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
           : "Reconecte esta conta via Meta para conceder a permissão de insights."}
         action={hasInsightsScope ? (
           <div className="page-actions">
-            <form action={refreshInsightsAction}>
-              <input type="hidden" name="accountId" value={account.id} />
-              <input type="hidden" name="returnTo" value={`/contas/${account.id}`} />
-              <button className="button button-small button-secondary" type="submit">Atualizar agora</button>
-            </form>
+            {["CONNECTED", "TOKEN_EXPIRING"].includes(account.status) ? (
+              <form action={refreshInsightsAction}>
+                <input type="hidden" name="accountId" value={account.id} />
+                <input type="hidden" name="returnTo" value={`/contas/${account.id}`} />
+                <button className="button button-small button-secondary" type="submit">Atualizar agora</button>
+              </form>
+            ) : null}
             <Link className="text-link" href={`/analises?conta=${account.id}`}>Ver análises completas</Link>
           </div>
         ) : undefined}

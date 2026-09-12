@@ -180,7 +180,7 @@ export async function runInsightsSync(workerId: string) {
     try {
       const { calls, mediaSynced } = await syncAccount(account, new Date());
       synced++;
-      log("info", "insights-sync", "account_synced", {
+      log("info", "insights-sync", "insights_synced", {
         worker_id: workerId, account_id: account.id, calls, media_synced: mediaSynced, duration_ms: Date.now() - started,
       });
     } catch (rawError) {

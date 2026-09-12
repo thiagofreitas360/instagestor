@@ -250,9 +250,9 @@ export function formatNumber(value: number | null | undefined) {
   return new Intl.NumberFormat("pt-BR").format(value);
 }
 
-export function Delta({ value }: { value: number | null }) {
+export function Delta({ value, invert }: { value: number | null; invert?: boolean }) {
   if (value === null) return <span className="metric-delta metric-delta-neutral">novo</span>;
-  const tone = value > 0 ? "up" : value < 0 ? "down" : "neutral";
+  const tone = value > 0 ? (invert ? "down" : "up") : value < 0 ? (invert ? "up" : "down") : "neutral";
   const arrow = value > 0 ? "▲" : value < 0 ? "▼" : "•";
   return (
     <span className={`metric-delta metric-delta-${tone}`}>
