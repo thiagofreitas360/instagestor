@@ -20,11 +20,11 @@ async function main() {
       await getSqlClient()`
         INSERT INTO instagram_accounts (
           instagram_user_id, app_scoped_user_id, username, display_name, account_type, status,
-          encrypted_access_token, token_expires_at, token_last_refreshed_at
+          encrypted_access_token, token_expires_at, token_last_refreshed_at, granted_scopes
         ) VALUES (
           ${instagramId}, ${`app_${instagramId}`}, ${`conta_teste_${position}`}, ${`Conta Teste ${position}`},
           'BUSINESS', 'CONNECTED', ${encryptToken(`fake-token:${instagramId}:conta_teste_${position}`)},
-          now() + interval '60 days', now()
+          now() + interval '60 days', now(), ${["instagram_business_basic", "instagram_business_content_publish", "instagram_business_manage_insights"]}
         ) ON CONFLICT (instagram_user_id) DO NOTHING
       `;
     }
