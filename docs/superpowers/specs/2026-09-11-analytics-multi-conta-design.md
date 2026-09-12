@@ -174,7 +174,7 @@ Orçamento: 1 (`/me`) + 3 (`total_value` × dia) + 1 (`time_series`) + 1–2 (`/
 
 Para o período `[início, fim]` (fim = hoje UTC) e o período anterior de mesmo tamanho:
 
-- **Seguidores (total):** soma, por conta, do `followers_count` não nulo da última linha ≤ `fim`.
+- **Seguidores (total):** soma, por conta, do `followers_count` não nulo da última linha dentro do período.
 - **Variação líquida:** soma, por conta, de (`followers_count` da última linha ≤ `fim`) − (`followers_count` da última linha < `início`; se não existir, a primeira do período).
 - **Ganhos:** `SUM(follower_gains)` no período (`NULL` conta como 0).
 - **Perdidos:** `GREATEST(ganhos − variação líquida, 0)`. Derivado; subestima em contas sem `follower_gains` (< 100 seguidores). (`ponytail:` marcar; trocar por `follows_and_unfollows` com breakdown se o smoke test confirmar que devolve unfollows separado.)
@@ -200,7 +200,7 @@ Blocos, de cima para baixo:
 2. **Aviso** (quando houver): "N contas precisam reconectar para habilitar análises" com lista e link OAuth. "N contas com erro no sync" com código.
 3. **Cards KPI** (`MetricCard` existente + delta): Seguidores, Ganhos, Perdidos, Variação líquida, Alcance, Visualizações, Visitas ao perfil, Interações, Curtidas, Comentários, Compartilhamentos, Salvamentos. Cliques no link e Respostas de story em segunda linha compacta.
 4. **Gráficos**: linha "Seguidores por dia" (agregado = soma) e barras "Alcance e visualizações por dia". Componentes `LineChart` e `BarChart` em `src/components/charts.tsx`, SVG puro, `<title>` por ponto para acessibilidade, largura 100 % via `viewBox`.
-5. **Ranking de contas** (só sem filtro de conta): tabela com Conta, Status, Seguidores, Δ seguidores, Alcance, Views, Interações, Mídias no período, Última sync. Ordenável por `?ordem=`. Linha clica para `/analises?conta=<id>`.
+5. **Ranking de contas** (só sem filtro de conta): tabela com Conta, Status, Seguidores, Δ seguidores, Alcance, Views, Interações, Mídias no período, Última sync. Ordenável por `?ordem=`. Linha clica para `/analises?conta=<id>`. O ranking lista contas conectadas agora ou com métricas no período; contas banidas/desconectadas saem quando seu histórico deixa a janela.
 6. **Mídias no período**: tabs `Todas | Reels | Posts | Stories` (links), tabela com miniatura, conta, tipo, data, Views, Alcance, Curtidas, Comentários, Compart., Salv., coluna extra por tipo (Reels: tempo médio assistido; Stories: saídas/avanços/voltas; Feed: seguidores ganhos), badge "via InstaGestor" quando `published_job_id` não é nulo, link para o permalink. Limite 20, ordenação `?ordem=`.
 7. **Individual** (com `conta`): acima do bloco 3, um `account-hero` compacto com foto, `@usuario`, bio, site, `followers/follows/media_count` atuais e link para `/contas/[id]`.
 

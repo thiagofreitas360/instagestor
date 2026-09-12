@@ -67,7 +67,7 @@ function followerBounds(ids: string[] | null, from: string, to: string) {
     ), last_in AS (
       SELECT DISTINCT ON (m.instagram_account_id) m.instagram_account_id, m.followers_count
       FROM account_daily_metrics m JOIN scoped ON scoped.id = m.instagram_account_id
-      WHERE m.day <= ${to}::date AND m.followers_count IS NOT NULL
+      WHERE m.day BETWEEN ${from}::date AND ${to}::date AND m.followers_count IS NOT NULL
       ORDER BY m.instagram_account_id, m.day DESC
     ), base AS (
       SELECT DISTINCT ON (instagram_account_id) instagram_account_id, followers_count FROM (
@@ -152,7 +152,7 @@ export async function loadAnalytics(input: {
       FROM instagram_accounts account
       LEFT JOIN account_daily_metrics m ON m.instagram_account_id = account.id AND m.day BETWEEN ${from}::date AND ${to}::date
       WHERE (${ids}::uuid[] IS NULL OR account.id = ANY(${ids}::uuid[]))
-        AND (account.granted_scopes IS NOT NULL OR account.insights_synced_at IS NOT NULL OR m.instagram_account_id IS NOT NULL)
+        AND (account.status IN ('CONNECTED', 'TOKEN_EXPIRING') OR m.instagram_account_id IS NOT NULL)
       GROUP BY account.id
     `,
     followerBounds(ids, from, to),
