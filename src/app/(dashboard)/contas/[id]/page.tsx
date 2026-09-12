@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { disconnectAccountAction, verifyAccountAction } from "@/app/actions";
+import { banAccountAction, disconnectAccountAction, refreshInsightsAction, unbanAccountAction, verifyAccountAction } from "@/app/actions";
 import { getSqlClient } from "@/db/client";
 import {
   DefinitionList,
   EmptyState,
   formatDate,
+  formatNumber,
   MessageBanner,
   MetricCard,
   PageHeader,
@@ -13,6 +14,7 @@ import {
   StatusBadge,
   initials,
 } from "@/components/ui";
+import { loadAnalytics, resolvePeriod } from "@/server/analytics";
 
 type Account = {
   id: string;
@@ -33,6 +35,10 @@ type Account = {
   publishing_limit_total: number | null;
   publishing_limit_checked_at: Date | null;
   created_at: Date;
+  banned_at: Date | null;
+  ban_reason: string | null;
+  granted_scopes: string[] | null;
+  insights_synced_at: Date | null;
 };
 
 type GroupRow = { id: string; name: string };
@@ -64,7 +70,8 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
       SELECT id, instagram_user_id, username, display_name, profile_picture_url, account_type, status,
         token_expires_at, token_last_refreshed_at, token_last_checked_at,
         last_successful_api_call_at, last_error_at, last_error_code, last_error_message,
-        publishing_limit_usage, publishing_limit_total, publishing_limit_checked_at, created_at
+        publishing_limit_usage, publishing_limit_total, publishing_limit_checked_at, created_at,
+        banned_at, ban_reason, granted_scopes, insights_synced_at
       FROM instagram_accounts WHERE id = ${id} LIMIT 1
     `,
     sql<GroupRow[]>`
@@ -93,7 +100,11 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
   ]);
   if (!account) notFound();
 
-  const mustReconnect = ["REAUTH_REQUIRED", "DISCONNECTED", "DISABLED"].includes(account.status);
+  const analytics = await loadAnalytics({ accountIds: [account.id], period: resolvePeriod(30) });
+  const hasInsightsScope = account.granted_scopes?.includes("instagram_business_manage_insights") ?? false;
+  const isBanned = account.status === "BANNED";
+
+  const mustReconnect = ["REAUTH_REQUIRED", "DISCONNECTED", "DISABLED", "BANNED"].includes(account.status);
   const canVerify = !mustReconnect;
   const totalLimit = account.publishing_limit_total ?? 0;
   const limitUsage = account.publishing_limit_usage ?? 0;
@@ -118,6 +129,12 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
                 <button className="button button-secondary" type="submit">Verificar agora</button>
               </form>
             )}
+            {isBanned ? (
+              <form action={unbanAccountAction}>
+                <input type="hidden" name="accountId" value={account.id} />
+                <button className="button button-secondary" type="submit">Desmarcar banimento</button>
+              </form>
+            ) : null}
             {canVerify ? (
               <form action={disconnectAccountAction}>
                 <input type="hidden" name="accountId" value={account.id} />
@@ -128,6 +145,13 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
         }
       />
       <MessageBanner error={first(query.erro)} success={first(query.ok)} />
+
+      {isBanned ? (
+        <div className="message-banner message-error" role="alert">
+          <strong>Conta marcada como banida em {formatDate(account.banned_at)}</strong>
+          <span>{account.ban_reason}</span>
+        </div>
+      ) : null}
 
       <section className="account-hero panel">
         <span className="account-avatar account-avatar-large" aria-hidden="true">
@@ -163,6 +187,30 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
         <MetricCard label="Com atenção" value={stats.failed} tone={stats.failed ? "danger" : "default"} />
         <MetricCard label="Cota disponível" value={totalLimit ? remaining : "—"} detail={totalLimit ? `${limitUsage} de ${totalLimit} usados` : "Ainda não consultada"} />
       </section>
+
+      <Panel
+        title="Análises (últimos 30 dias)"
+        description={hasInsightsScope
+          ? `Último sync: ${formatDate(account.insights_synced_at)}`
+          : "Reconecte esta conta via Meta para conceder a permissão de insights."}
+        action={hasInsightsScope ? (
+          <div className="page-actions">
+            <form action={refreshInsightsAction}>
+              <input type="hidden" name="accountId" value={account.id} />
+              <input type="hidden" name="returnTo" value={`/contas/${account.id}`} />
+              <button className="button button-small button-secondary" type="submit">Atualizar agora</button>
+            </form>
+            <Link className="text-link" href={`/analises?conta=${account.id}`}>Ver análises completas</Link>
+          </div>
+        ) : undefined}
+      >
+        <section className="metric-grid metric-grid-compact">
+          <MetricCard label="Seguidores" value={formatNumber(analytics.totals.followers)} tone="brand" />
+          <MetricCard label="Alcance" value={formatNumber(analytics.totals.reach)} />
+          <MetricCard label="Visualizações" value={formatNumber(analytics.totals.views)} />
+          <MetricCard label="Interações" value={formatNumber(analytics.totals.totalInteractions)} />
+        </section>
+      </Panel>
 
       <section className="two-column-grid">
         <Panel title="Token e limite" description="Dados operacionais, sem expor credenciais">
@@ -203,6 +251,22 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
           </div>
         ) : <EmptyState title="Sem atividade" description="Os jobs desta conta aparecerão aqui após o primeiro agendamento." />}
       </Panel>
+
+      {!isBanned ? (
+        <Panel className="danger-zone" title="Marcar como banida" description="Use quando a Meta suspendeu ou desativou esta conta. Jobs pendentes serão encerrados e o token descartado.">
+          <details className="native-disclosure">
+            <summary>Registrar banimento</summary>
+            <form className="form-stack" action={banAccountAction}>
+              <input type="hidden" name="accountId" value={account.id} />
+              <label>
+                Motivo
+                <textarea name="reason" minLength={3} maxLength={500} rows={3} required placeholder="Ex.: suspensa após checkpoint de verificação" />
+              </label>
+              <button className="button button-danger" type="submit">Confirmar banimento</button>
+            </form>
+          </details>
+        </Panel>
+      ) : null}
     </div>
   );
 }

@@ -61,6 +61,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
     if (selectedFilter === "problema") return ["ERROR", "DISABLED"].includes(account.status);
     if (selectedFilter === "expirando") return account.status === "TOKEN_EXPIRING";
     if (selectedFilter === "reconectar") return account.status === "REAUTH_REQUIRED";
+    if (selectedFilter === "banidas") return account.status === "BANNED";
     return true;
   });
 
@@ -85,6 +86,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           ["problema", "Problema"],
           ["expirando", "Expirando"],
           ["reconectar", "Reconectar"],
+          ["banidas", "Banidas"],
         ].map(([value, label]) => (
           <Link
             className={`button button-small ${selectedFilter === value ? "button-primary" : "button-secondary"}`}
@@ -181,7 +183,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                         <div className="table-actions">
                           {account.status === "REAUTH_REQUIRED" ? <Link className="button button-small button-primary" href="/api/instagram/oauth/start">Reconectar</Link> : null}
                           <Link className="button button-small button-secondary" href={`/contas/${account.id}`}>Detalhes</Link>
-                          {!(["DISCONNECTED", "DISABLED"].includes(account.status)) ? (
+                          {!(["DISCONNECTED", "DISABLED", "BANNED"].includes(account.status)) ? (
                             <form action={disconnectAccountAction}>
                               <input type="hidden" name="accountId" value={account.id} />
                               <button className="button button-small button-quiet-danger" type="submit">Desconectar</button>
