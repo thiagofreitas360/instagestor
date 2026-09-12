@@ -30,6 +30,7 @@ const statusLabels: Record<string, string> = {
   RECONCILIATION_REQUIRED: "Verificação manual",
   ONLINE: "Online",
   OFFLINE: "Offline",
+  BANNED: "Banida",
 };
 
 const successStatuses = new Set(["CONNECTED", "READY", "COMPLETED", "PUBLISHED", "ONLINE"]);
@@ -54,6 +55,7 @@ const dangerStatuses = new Set([
   "PARTIALLY_FAILED",
   "RECONCILIATION_REQUIRED",
   "OFFLINE",
+  "BANNED",
 ]);
 
 export function StatusBadge({ status, label }: { status: string; label?: string }) {
@@ -241,4 +243,20 @@ export function initials(value: string) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("");
+}
+
+export function formatNumber(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  return new Intl.NumberFormat("pt-BR").format(value);
+}
+
+export function Delta({ value }: { value: number | null }) {
+  if (value === null) return <span className="metric-delta metric-delta-neutral">novo</span>;
+  const tone = value > 0 ? "up" : value < 0 ? "down" : "neutral";
+  const arrow = value > 0 ? "▲" : value < 0 ? "▼" : "•";
+  return (
+    <span className={`metric-delta metric-delta-${tone}`}>
+      {arrow} {new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 }).format(Math.abs(value))}% vs. período anterior
+    </span>
+  );
 }
