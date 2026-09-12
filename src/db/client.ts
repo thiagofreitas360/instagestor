@@ -16,6 +16,11 @@ export function getSqlClient() {
       idle_timeout: 20,
       connect_timeout: 10,
       prepare: false,
+      types: {
+        // ponytail: jsonb params are always pre-stringified here (`${JSON.stringify(x)}::jsonb`). postgres.js would
+        // JSON.stringify them again in production (drizzle's driver already disables that in tests) — send as-is.
+        json: { to: 114, from: [114, 3802], serialize: (value: string) => value, parse: (value: string) => JSON.parse(value) },
+      },
     });
   }
   return globalDatabase.sqlClient;

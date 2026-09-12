@@ -63,7 +63,7 @@ test.describe("análises", () => {
     await page.goto("/analises/banidas");
     await expect(page.getByText("Suspensa pela Meta no e2e")).toBeVisible();
     await expect(page.getByRole("cell", { name: "1.000" })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "20" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "20", exact: true })).toBeVisible();
 
     await page.goto(`/contas/${accountId}`);
     await page.getByRole("button", { name: "Desmarcar banimento" }).click();
