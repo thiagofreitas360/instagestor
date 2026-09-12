@@ -6,7 +6,7 @@ import { headers } from "next/headers";
 import { z } from "zod";
 import { getSqlClient } from "@/db/client";
 import { authenticate, clearSession, clientAddressFromHeaders, requireAdmin, setSession } from "@/server/auth";
-import { createFakeAccounts, disconnectAccount, verifyAccount } from "@/server/accounts";
+import { banAccount, createFakeAccounts, disconnectAccount, requestInsightsRefresh, unbanAccount, verifyAccount } from "@/server/accounts";
 import { createCampaign, createGroup, deleteGroup, replaceGroupMembers, resolveTargetIds, updateGroup } from "@/server/campaigns";
 import { deleteMedia } from "@/server/media";
 import {
@@ -87,6 +87,54 @@ export async function verifyAccountAction(formData: FormData) {
   } catch (error) {
     back(`/contas/${accountId}`, error);
   }
+}
+
+function safeReturnPath(value: FormDataEntryValue | null, fallback: string) {
+  const path = typeof value === "string" ? value : "";
+  return /^\/(analises|contas)(\/|\?|$)/.test(path) ? path : fallback;
+}
+
+export async function refreshInsightsAction(formData: FormData) {
+  await requireAdmin();
+  const accountId = z.uuid().optional().parse(formData.get("accountId") || undefined);
+  const returnTo = safeReturnPath(formData.get("returnTo"), "/analises");
+  let count = 0;
+  try {
+    count = await requestInsightsRefresh(accountId);
+    revalidatePath("/analises");
+  } catch (error) {
+    back(returnTo, error);
+  }
+  const separator = returnTo.includes("?") ? "&" : "?";
+  redirect(`${returnTo}${separator}ok=${encodeURIComponent(`Atualização solicitada para ${count} conta(s); o worker processa em até 1 minuto`)}`);
+}
+
+export async function banAccountAction(formData: FormData) {
+  const user = await requireAdmin();
+  const accountId = id.parse(formData.get("accountId"));
+  try {
+    await banAccount(accountId, String(formData.get("reason") ?? ""), user.id);
+    revalidatePath("/contas");
+    revalidatePath(`/contas/${accountId}`);
+    revalidatePath("/analises/banidas");
+  } catch (error) {
+    back(`/contas/${accountId}`, error);
+  }
+  redirect(`/contas/${accountId}?ok=${encodeURIComponent("Conta marcada como banida")}`);
+}
+
+export async function unbanAccountAction(formData: FormData) {
+  const user = await requireAdmin();
+  const accountId = id.parse(formData.get("accountId"));
+  try {
+    await unbanAccount(accountId, user.id);
+    revalidatePath("/contas");
+    revalidatePath(`/contas/${accountId}`);
+    revalidatePath("/analises/banidas");
+  } catch (error) {
+    back(`/contas/${accountId}`, error);
+  }
+  redirect(`/contas/${accountId}?ok=${encodeURIComponent("Banimento desmarcado; reconecte a conta para voltar a usá-la")}`);
 }
 
 export async function createGroupAction(formData: FormData) {

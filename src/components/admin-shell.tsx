@@ -4,6 +4,7 @@ import { logoutAction } from "@/app/actions";
 const navigation = [
   { href: "/dashboard", label: "Dashboard", mark: "D" },
   { href: "/contas", label: "Contas", mark: "@" },
+  { href: "/analises", label: "Análises", mark: "A" },
   { href: "/grupos", label: "Grupos", mark: "G" },
   { href: "/midias", label: "Mídias", mark: "M" },
   { href: "/campanhas", label: "Campanhas", mark: "C" },
