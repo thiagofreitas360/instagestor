@@ -405,6 +405,8 @@ export async function deleteDataBySignedRequest(signedRequest: string) {
       : [];
     if (account) {
       await sql`DELETE FROM account_group_members WHERE instagram_account_id = ${account.id}`;
+      await sql`DELETE FROM account_media WHERE instagram_account_id = ${account.id}`;
+      await sql`DELETE FROM account_daily_metrics WHERE instagram_account_id = ${account.id}`;
       await sql`
         UPDATE publication_jobs SET status = 'CANCELLED', finished_at = now(),
           locked_at = NULL, locked_by = NULL, lock_expires_at = NULL,
@@ -436,7 +438,9 @@ export async function deleteDataBySignedRequest(signedRequest: string) {
           token_last_refreshed_at = NULL, token_last_checked_at = NULL,
           last_successful_api_call_at = NULL, last_error_at = NULL, last_error_code = NULL,
           last_error_message = NULL, publishing_limit_usage = NULL, publishing_limit_total = NULL,
-          publishing_limit_checked_at = NULL, disconnected_at = now(), updated_at = now()
+          publishing_limit_checked_at = NULL, disconnected_at = now(), updated_at = now(),
+          biography = NULL, website = NULL, granted_scopes = NULL, insights_error_code = NULL,
+          insights_synced_at = NULL
         WHERE id = ${account.id}
       `;
       await sql`

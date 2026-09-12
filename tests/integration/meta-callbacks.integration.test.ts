@@ -134,4 +134,43 @@ describe("callbacks Meta concorrentes", () => {
     expect(second.confirmationCode).not.toBe(first.confirmationCode);
     expect(afterNewRequest).toEqual({ status: "DISCONNECTED", app_scoped_user_id: null });
   });
+
+  it("apaga métricas e mídias da conta ao processar exclusão de dados", async () => {
+    const sql = getSqlClient();
+    const appScopedId = `app-${randomUUID()}`;
+    const [account] = await sql<{ id: string }[]>`
+      INSERT INTO instagram_accounts (
+        instagram_user_id, app_scoped_user_id, username, encrypted_access_token,
+        granted_scopes, biography, website
+      ) VALUES (
+        ${`ig-${randomUUID()}`}, ${appScopedId}, 'com_dados', ${encryptToken("old-token")},
+        ARRAY['instagram_business_manage_insights'], 'Bio da loja', 'https://loja.example'
+      ) RETURNING id
+    `;
+    await sql`
+      INSERT INTO account_daily_metrics (instagram_account_id, day, followers_count)
+      VALUES (${account.id}, current_date, 100)
+    `;
+    await sql`
+      INSERT INTO account_media (id, instagram_account_id, media_type, product_type, posted_at)
+      VALUES (${`media-${randomUUID()}`}, ${account.id}, 'IMAGE', 'FEED', now())
+    `;
+    const request = signDeauthorization(appScopedId, Math.floor(Date.now() / 1000));
+
+    await deleteDataBySignedRequest(request);
+
+    const [[metricsCount], [mediaCount]] = await Promise.all([
+      sql<Array<{ count: number }>>`SELECT count(*)::int AS count FROM account_daily_metrics WHERE instagram_account_id = ${account.id}`,
+      sql<Array<{ count: number }>>`SELECT count(*)::int AS count FROM account_media WHERE instagram_account_id = ${account.id}`,
+    ]);
+    expect(metricsCount.count).toBe(0);
+    expect(mediaCount.count).toBe(0);
+
+    const [row] = await sql<Array<{
+      biography: string | null; website: string | null; granted_scopes: string[] | null; insights_synced_at: Date | null;
+    }>>`
+      SELECT biography, website, granted_scopes, insights_synced_at FROM instagram_accounts WHERE id = ${account.id}
+    `;
+    expect(row).toEqual({ biography: null, website: null, granted_scopes: null, insights_synced_at: null });
+  });
 });
