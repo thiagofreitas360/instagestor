@@ -4,6 +4,7 @@ import { getEnv } from "../src/lib/env";
 import { log } from "../src/lib/logger";
 import { claimJob, processClaimedJob, recoverStaleJobs } from "../src/jobs/queue";
 import { refreshExpiringTokens } from "../src/jobs/token-maintenance";
+import { runInsightsSync } from "../src/jobs/insights-sync";
 
 const workerId = `${process.env.HOSTNAME ?? "worker"}-${process.pid}-${randomUUID().slice(0, 8)}`;
 let stopping = false;
@@ -76,6 +77,7 @@ async function main() {
   const heartbeatTask = createMaintenanceTask("heartbeat_failed", heartbeat);
   const tokenTask = createMaintenanceTask("token_maintenance_failed", () => refreshExpiringTokens(workerId));
   const recoveryTask = createMaintenanceTask("recovery_failed", recoverStaleJobs);
+  const insightsTask = createMaintenanceTask("insights_sync_failed", () => runInsightsSync(workerId));
   await heartbeatTask.trigger();
   const heartbeatTimer = setInterval(() => void heartbeatTask.trigger(), 10_000);
   const tokenTimer = setInterval(
@@ -86,19 +88,22 @@ async function main() {
     () => void recoveryTask.trigger(),
     30_000,
   );
+  const insightsTimer = setInterval(() => void insightsTask.trigger(), 60_000);
   void tokenTask.trigger();
+  void insightsTask.trigger();
 
   const shutdown = () => {
     stopping = true;
     clearInterval(heartbeatTimer);
     clearInterval(tokenTimer);
     clearInterval(recoveryTimer);
+    clearInterval(insightsTimer);
   };
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
 
   await Promise.all(Array.from({ length: env.WORKER_CONCURRENCY }, runner));
-  await Promise.all([heartbeatTask.wait(), tokenTask.wait(), recoveryTask.wait()]);
+  await Promise.all([heartbeatTask.wait(), tokenTask.wait(), recoveryTask.wait(), insightsTask.wait()]);
   await getSqlClient()`DELETE FROM worker_heartbeats WHERE worker_id = ${workerId}`;
   await closeDatabase();
   log("info", "worker", "stopped", { worker_id: workerId });
