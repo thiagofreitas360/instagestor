@@ -111,6 +111,16 @@ describe("runInsightsSync", () => {
     `;
     expect(limited).toEqual({ status: "CONNECTED", insights_error_code: "FAKE_429", future: true });
 
+    await sql`UPDATE instagram_accounts SET status = 'CONNECTED', insights_synced_at = NULL WHERE id = ${account.id}`;
+    process.env.FAKE_PROVIDER_SCENARIO = "http_403";
+    resetEnvForTests();
+    resetInstagramProviderForTests();
+    expect(await runInsightsSync("w")).toEqual({ synced: 0, failed: 1 });
+    const [permissionDenied] = await sql<Array<{ status: string; insights_error_code: string | null }>>`
+      SELECT status, insights_error_code FROM instagram_accounts WHERE id = ${account.id}
+    `;
+    expect(permissionDenied).toEqual({ status: "CONNECTED", insights_error_code: "FAKE_403" });
+
     process.env.FAKE_PROVIDER_SCENARIO = "success";
     resetEnvForTests();
     resetInstagramProviderForTests();

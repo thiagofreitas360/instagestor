@@ -160,7 +160,7 @@ Cada execução:
    - Vincula `published_job_id` via `UPDATE account_media SET published_job_id = job.id FROM publication_jobs job WHERE job.meta_media_id = account_media.id AND account_media.published_job_id IS NULL`.
    - Sucesso → `insights_error_code = NULL`, `last_successful_api_call_at = now()`.
 3. Erros:
-   - `AUTH` → `markAccountUnavailableIfCurrent(... nextStatus: 'REAUTH_REQUIRED')` (reuso; fecha jobs pendentes como hoje).
+   - `AUTH` por token inválido (HTTP 401 ou código 190) → `markAccountUnavailableIfCurrent(... 'REAUTH_REQUIRED')`; outros `AUTH` (ex.: 403 de permissão) → `insights_error_code`, publicação intocada (§4).
    - `RATE_LIMIT` → grava `insights_error_code`, `insights_synced_at = now() + GREATEST(retryAfter, 15 min)` (a conta volta a ser elegível após `INSIGHTS_SYNC_INTERVAL_MS` contado desse instante) e passa para a próxima conta.
    - `TRANSIENT`/`PERMANENT`/`VALIDATION` na conta → grava `insights_error_code` e segue; a conta volta na próxima janela.
    - Erro em uma mídia isolada → loga e continua com as demais.

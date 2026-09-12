@@ -245,7 +245,10 @@ export class MetaInstagramProvider implements InstagramProvider {
         metric: MEDIA_METRICS[productType], access_token: accessToken,
       }));
     } catch (error) {
-      if (error instanceof InstagramError && error.kind === "VALIDATION") return result;
+      if (error instanceof InstagramError && error.kind === "VALIDATION") {
+        log("info", "meta", "media_insights_unavailable", { media_id: mediaId, product_type: productType, code: error.code });
+        return result;
+      }
       throw error;
     }
     result.views = entryValue(data, "views");
@@ -274,6 +277,7 @@ export class MetaInstagramProvider implements InstagramProvider {
         : null;
     } catch (error) {
       if (!(error instanceof InstagramError && error.kind === "VALIDATION")) throw error;
+      log("info", "meta", "media_insights_unavailable", { media_id: mediaId, product_type: productType, code: error.code });
     }
     return result;
   }

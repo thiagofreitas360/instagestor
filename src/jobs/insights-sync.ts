@@ -186,7 +186,8 @@ export async function runInsightsSync(workerId: string) {
     } catch (rawError) {
       failed++;
       const error = asInstagramError(rawError);
-      if (error.kind === "AUTH") {
+      // Só token inválido (401 ou código Meta 190) derruba a conta; outros AUTH (ex.: 403 de permissão) não afetam a publicação.
+      if (error.kind === "AUTH" && (error.httpStatus === 401 || error.code.startsWith("META_190"))) {
         await markAccountUnavailableIfCurrent({
           accountId: account.id,
           expectedEncryptedToken: account.encrypted_access_token,
