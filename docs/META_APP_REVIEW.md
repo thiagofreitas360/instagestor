@@ -1,7 +1,7 @@
 # Meta App Review — pacote de prontidão
 
 **Data da consulta:** 01/09/2026
-**Permissões:** `instagram_business_basic`, `instagram_business_content_publish`
+**Permissões:** `instagram_business_basic`, `instagram_business_content_publish`, `instagram_business_manage_insights`
 
 ## Quando a revisão é necessária
 
@@ -97,7 +97,7 @@ Grave em uma tomada contínua ou com cortes claramente identificados:
 1. Abrir a URL pública de staging e fazer login com a credencial de reviewer.
 2. Abrir **Contas**.
 3. Clicar **Conectar Instagram**.
-4. Mostrar Business Login for Instagram e autorizar os dois scopes.
+4. Mostrar Business Login for Instagram e autorizar os três scopes.
 5. Retornar automaticamente ao InstaGestor.
 6. Mostrar a conta conectada com username, ID e status, cobrindo `instagram_business_basic`.
 7. Abrir **Mídias** e enviar uma imagem JPEG de teste.
@@ -134,7 +134,7 @@ Não colocar senha em repositório, README, vídeo público ou campo de justific
 
 ## Evidências antes de enviar
 
-- [ ] OAuth pede exatamente os dois scopes.
+- [ ] OAuth pede exatamente os três scopes.
 - [ ] Redirect URI de staging corresponde exatamente ao painel.
 - [ ] `/me` retorna a conta profissional e a UI exibe a identidade.
 - [ ] Uma imagem de Feed foi publicada com sucesso pela API v26.0.
