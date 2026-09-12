@@ -63,12 +63,13 @@ O OAuth desta aplicação deve pedir somente:
 ```text
 instagram_business_basic
 instagram_business_content_publish
+instagram_business_manage_insights
 ```
 
 1. Na customização do caso de uso, abra a área de permissões.
 2. Adicione `instagram_business_basic`.
 3. Adicione `instagram_business_content_publish`.
-4. Remova/desmarque permissões de mensagens, comentários, insights, Human Agent, ads e qualquer outra que não seja usada.
+4. Mantenha `instagram_business_manage_insights` marcada e remova/desmarque permissões de mensagens, comentários, Human Agent, ads e qualquer outra que não seja usada.
 
 O guia do painel informa que **Add all required permissions** pode adicionar `instagram_business_manage_messages` por padrão por causa do caso de uso amplo. Esta aplicação não usa mensagens e não deve incluir esse scope na URL OAuth. Se o painel não permitir remover a permissão do produto, deixá-la sem Advanced Access e sem solicitá-la ao usuário; **verificar no painel da Meta** antes da submissão.
 
@@ -180,7 +181,7 @@ https://www.instagram.com/oauth/authorize
 ?client_id={INSTAGRAM_APP_ID}
 &redirect_uri={URL_ENCODED_INSTAGRAM_REDIRECT_URI}
 &response_type=code
-&scope=instagram_business_basic,instagram_business_content_publish
+&scope=instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights
 &state={OPAQUE_SINGLE_USE_STATE}
 ```
 
@@ -188,7 +189,7 @@ Checklist:
 
 1. Entre no painel interno.
 2. Clique **Conectar Instagram**.
-3. Confirme que a origem é `www.instagram.com` e os dois escopos são os esperados.
+3. Confirme que a origem é `www.instagram.com` e os três escopos são os esperados.
 4. Autorize.
 5. Confirme retorno ao callback cadastrado.
 6. Verifique consumo single-use do `state` e do code.

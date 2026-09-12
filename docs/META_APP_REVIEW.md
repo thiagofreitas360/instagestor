@@ -76,6 +76,20 @@ Essa demonstração acompanha os requisitos da [Permissions reference](https://d
 
 A [Permissions reference](https://developers.facebook.com/docs/permissions#instagram_business_basic) pede demonstrar criação de um novo post orgânico de Feed, caption/hashtags/metadados e resultado no Feed. Use imagem no teste principal; Reel/Story/Carousel podem ser mostrados depois, sem tornar a gravação principal ambígua.
 
+## Texto sugerido — `instagram_business_manage_insights`
+
+### Justificativa em inglês
+
+> InstaGestor shows an authorized organization administrator the performance of the Instagram professional accounts the organization owns or is authorized to manage. After the administrator connects an account with Business Login for Instagram, a background worker periodically calls the account insights endpoint (reach, views, profile views, accounts engaged, interactions, follower count) and the media insights endpoint for recent posts, reels and stories. The results are stored and displayed in the Analytics screen, aggregated across all connected accounts and per account, so the administrator can compare accounts, track follower growth and identify the best-performing content. InstaGestor does not use insights for ads, does not expose them to third parties and does not access consumer accounts.
+
+### O screencast precisa mostrar
+
+1. Conta já conectada após o OAuth (com a permissão de insights concedida na tela da Meta).
+2. Tela **Análises** com os cards de seguidores, alcance, visualizações e interações.
+3. Filtro por conta mostrando a mesma tela para uma conta só.
+4. Tabela de mídias com views/alcance por reel/post/story.
+5. Se endpoints forem mostrados, exibir apenas `GET /{ig-user-id}/insights` e `GET /{ig-media-id}/insights`; ocultar token e headers.
+
 ## Roteiro de screencast único
 
 Grave em uma tomada contínua ou com cortes claramente identificados:
@@ -90,6 +104,7 @@ Grave em uma tomada contínua ou com cortes claramente identificados:
 8. Abrir **Campanhas**, criar Feed de imagem, selecionar a conta e preencher caption.
 9. Mostrar preview e confirmar/publicar, cobrindo `instagram_business_content_publish`.
 10. Mostrar o status final, IG Media ID e o post no Instagram.
+11. Abrir **Análises** e mostrar os indicadores da conta conectada.
 
 Final opcional: mostrar Story e Reel em conta Business, sem substituir a prova obrigatória do Feed image.
 
@@ -134,7 +149,7 @@ Não colocar senha em repositório, README, vídeo público ou campo de justific
 
 ## Erros que devem reprovar nossa própria submissão
 
-- Pedir mensagens/comentários/insights sem funcionalidade correspondente.
+- Pedir mensagens/comentários sem funcionalidade correspondente (insights agora tem tela própria).
 - Descrever automação genérica sem mostrar a ação explícita do administrador.
 - Mostrar apenas o painel interno e não o resultado no Instagram.
 - Fornecer credencial expirada, MFA inacessível ou ambiente restrito.

@@ -11,7 +11,9 @@ Todos os horários persistidos usam `timestamp with time zone` e são tratados c
 | Tabela | Finalidade | Invariantes principais |
 | --- | --- | --- |
 | `users` | Administrador interno | e-mail único; role limitada a `ADMIN`; somente hash Argon2id |
-| `instagram_accounts` | Perfil, estado, quota e token da conta | `instagram_user_id` e `app_scoped_user_id` únicos; token somente cifrado |
+| `instagram_accounts` | Perfil, estado, quota e token da conta | `instagram_user_id` e `app_scoped_user_id` únicos; token somente cifrado; escopos concedidos, bio/site, estado do sync de insights e banimento manual |
+| `account_daily_metrics` | Snapshot diário de métricas por conta | PK `(instagram_account_id, day)`; dia é data UTC; 3 últimos dias reescritos pelo sync |
+| `account_media` | Mídias recentes e seus insights | PK = IG media id; `product_type` restrito a FEED/REELS/STORY; `published_job_id` liga ao job que publicou |
 | `account_groups` | Agrupamento reutilizável | nome único |
 | `account_group_members` | Relação grupo–conta | PK composta impede membro duplicado |
 | `media_assets` | Metadados dos objetos | `storage_key` aleatória e única; tamanho positivo; soft delete |
@@ -61,7 +63,7 @@ O desenho completo está em [QUEUE.md](QUEUE.md).
 
 ### Segredos
 
-`encrypted_access_token` guarda envelope AES-256-GCM (`versão.iv.tag.ciphertext`), nunca plaintext. `authorized_at` muda somente em conexão/reconexão OAuth e permite ignorar callback antigo sem confundi-lo com refresh automático do token. `oauth_states.nonce_hash` não guarda o state original. `login_attempts.key_hash` não guarda e-mail/IP legíveis. App Secret, senha admin, chaves e credenciais de infraestrutura nunca pertencem ao banco.
+`encrypted_access_token` guarda envelope AES-256-GCM (`versão.iv.tag.ciphertext`), nunca plaintext. `authorized_at` muda somente em conexão/reconexão OAuth e permite ignorar callback antigo sem confundi-lo com refresh automático do token. `oauth_states.nonce_hash` não guarda o state original. `login_attempts.key_hash` não guarda e-mail/IP legíveis. App Secret, senha admin, chaves e credenciais de infraestrutura nunca pertencem ao banco. Parâmetros `jsonb` são sempre pré-serializados com `JSON.stringify` e o cliente envia a string como está (`src/db/client.ts`); linhas de `audit_logs` gravadas antes dessa correção podem ter `metadata_json` como string escalar.
 
 ## Índices
 
@@ -74,7 +76,8 @@ Os índices correspondem aos caminhos usados pela aplicação:
 - auditoria por `created_at` e índices parciais de expressão para confirmação de exclusão e idempotência de desautorização;
 - fila por `(status, scheduled_at)` e `(status, next_attempt_at)`;
 - jobs por conta e campanha;
-- recovery por `lock_expires_at`.
+- recovery por `lock_expires_at`;
+- métricas por `day`; mídias por `(instagram_account_id, posted_at)` e `posted_at`.
 
 Unique constraints também criam índices para identidades, posições e idempotência. Antes de adicionar outro índice, confirme o query real com `EXPLAIN (ANALYZE, BUFFERS)` em dados representativos; cada índice aumenta custo de escrita da fila.
 
@@ -134,7 +137,8 @@ Nunca execute fixtures fake no banco de produção.
 - preserve `audit_logs` de acordo com a política interna/legal;
 - defina retenção para OAuth states expirados, tentativas antigas, heartbeats órfãos e mídia soft-deleted;
 - automatize limpeza somente após medir e testar lotes pequenos;
-- coordene restore do banco com a existência dos objetos no bucket.
+- coordene restore do banco com a existência dos objetos no bucket;
+- defina retenção para `account_media` fora da janela se o volume incomodar; `account_daily_metrics` é pequena (1 linha/conta/dia).
 
 Antes de liberar workers após restore, aplique migrations, valide a chave de tokens, confira storage e confirme que não há jobs `PUBLISHING` cujo resultado externo seja desconhecido. Esses jobs devem ir para reconciliação, não para retry cego.
 

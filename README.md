@@ -1,6 +1,6 @@
 # Instagestor
 
-Painel interno para organizar e publicar mídia em aproximadamente 50 ou mais contas profissionais do Instagram. A aplicação usa somente a API oficial da Meta e também oferece um provider fake para desenvolvimento e testes sem credenciais externas.
+Painel interno para organizar e publicar mídia em aproximadamente 50 ou mais contas profissionais do Instagram. A aplicação usa somente a API oficial da Meta e também oferece um provider fake para desenvolvimento e testes sem credenciais externas. Também traz análises agregadas e por conta (seguidores, alcance, views, interações, mídias) e histórico de contas banidas.
 
 A arquitetura deliberadamente pequena é: Next.js + PostgreSQL + worker Node.js + storage S3 compatível. A fila usa o próprio PostgreSQL; não há Redis, broker ou microserviços.
 

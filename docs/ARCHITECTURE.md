@@ -25,7 +25,8 @@ flowchart LR
 - valida e armazena uploads;
 - cria campanhas, congela o snapshot de destinos e materializa os jobs;
 - expõe histórico, fila e healthcheck sanitizado;
-- recebe OAuth e callbacks assinados da Meta.
+- recebe OAuth e callbacks assinados da Meta;
+- expõe o painel de análises lendo somente do PostgreSQL.
 
 O web não executa publicação em segundo plano. Isso evita que reinícios e escalonamento do servidor HTTP afetem o processamento da fila.
 
@@ -37,7 +38,7 @@ Os destinos de `campaign_targets` são um snapshot. Alterar um grupo depois do a
 
 ### Worker
 
-Faz polling do PostgreSQL, reivindica no máximo um job por runner, valida ownership em cada escrita e conversa com storage e provider. O mesmo processo mantém heartbeat, recupera leases vencidos e atualiza tokens próximos da expiração. `WORKER_CONCURRENCY` controla quantos runners existem por processo.
+Faz polling do PostgreSQL, reivindica no máximo um job por runner, valida ownership em cada escrita e conversa com storage e provider. O mesmo processo mantém heartbeat, recupera leases vencidos e atualiza tokens próximos da expiração. `WORKER_CONCURRENCY` controla quantos runners existem por processo. Também sincroniza insights das contas a cada hora (claim em lote com `SKIP LOCKED`).
 
 ### Storage
 
@@ -90,3 +91,4 @@ O healthcheck não substitui alertas externos em produção. Monitore ao menos i
 - Polling é suficiente para a escala prevista; não há WebSocket.
 - MinIO é somente a implementação local do contrato S3, não um requisito de produção.
 - Fencing, criptografia de tokens, auditoria, retries e reconciliação ambígua permanecem porque são garantias, não complexidade acidental.
+- Insights persistidos em snapshots diários; sem consulta ao vivo na renderização.

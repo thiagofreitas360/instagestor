@@ -45,7 +45,10 @@ Injete-os pelo secret manager da plataforma. Nunca grave `.env` na imagem. Consu
 - `ALLOW_FAKE_PROVIDER_IN_PRODUCTION=false`;
 - `INSTAGRAM_REDIRECT_URI=https://painel.seudominio.example/api/instagram/oauth/callback`;
 - credenciais Meta e S3 vindas do secret manager;
-- `S3_FORCE_PATH_STYLE=false` para AWS/R2, salvo exigência do endpoint.
+- `S3_FORCE_PATH_STYLE=false` para AWS/R2, salvo exigência do endpoint;
+- `INSIGHTS_SYNC_INTERVAL_MS` (default `3600000`) e `INSIGHTS_MEDIA_WINDOW_DAYS` (default `30`) no worker.
+
+O sync de insights roda no worker; sem worker o painel de análises fica parado.
 
 Não troque `TOKEN_ENCRYPTION_KEY` sem um procedimento de recriptografia. Preserve uma cópia segura da chave junto aos backups; sem ela, tokens restaurados não podem ser usados.
 
