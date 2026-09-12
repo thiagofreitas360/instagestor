@@ -63,7 +63,7 @@ O desenho completo está em [QUEUE.md](QUEUE.md).
 
 ### Segredos
 
-`encrypted_access_token` guarda envelope AES-256-GCM (`versão.iv.tag.ciphertext`), nunca plaintext. `authorized_at` muda somente em conexão/reconexão OAuth e permite ignorar callback antigo sem confundi-lo com refresh automático do token. `oauth_states.nonce_hash` não guarda o state original. `login_attempts.key_hash` não guarda e-mail/IP legíveis. App Secret, senha admin, chaves e credenciais de infraestrutura nunca pertencem ao banco. Parâmetros `jsonb` são sempre pré-serializados com `JSON.stringify` e o cliente envia a string como está (`src/db/client.ts`); linhas de `audit_logs` gravadas antes dessa correção podem ter `metadata_json` como string escalar.
+`encrypted_access_token` guarda envelope AES-256-GCM (`versão.iv.tag.ciphertext`), nunca plaintext. `authorized_at` muda somente em conexão/reconexão OAuth e permite ignorar callback antigo sem confundi-lo com refresh automático do token. `oauth_states.nonce_hash` não guarda o state original. `login_attempts.key_hash` não guarda e-mail/IP legíveis. App Secret, senha admin, chaves e credenciais de infraestrutura nunca pertencem ao banco. Parâmetros `jsonb` são sempre pré-serializados com `JSON.stringify` e o cliente envia a string como está (`src/db/client.ts`); linhas de `audit_logs` gravadas antes dessa correção podem ter `metadata_json` como string escalar. A migration `0011` restaura as linhas antigas.
 
 ## Índices
 

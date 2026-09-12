@@ -78,6 +78,13 @@
       "when": 1789160585882,
       "tag": "0010_thin_rockslide",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1789219460485,
+      "tag": "0011_repair_audit_metadata_json",
+      "breakpoints": true
     }
   ]
 }
