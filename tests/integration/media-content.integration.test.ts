@@ -7,6 +7,8 @@ import { GET } from "@/app/api/media/[id]/content/route";
 import { getSqlClient } from "@/db/client";
 import { resetEnvForTests } from "@/lib/env";
 import { getStorageProvider, newStorageKey } from "@/providers/storage";
+import { createMediaFolder, deleteMediaFolder, renameMediaFolder } from "@/server/media";
+import { createUser } from "./helpers";
 
 let storageRoot: string;
 
@@ -55,5 +57,30 @@ describe("download temporário de mídia local", () => {
     );
     expect(invalid.status).toBe(416);
     expect(invalid.headers.get("content-range")).toBe("bytes */10");
+  });
+});
+
+describe("pastas de mídia", () => {
+  it("cria, renomeia e exclui a pasta sem excluir suas mídias", async () => {
+    const sql = getSqlClient();
+    const actorUserId = await createUser("media-folder@example.test");
+    const folderId = await createMediaFolder("Fitness", actorUserId);
+    const [asset] = await sql<Array<{ id: string }>>`
+      INSERT INTO media_assets (
+        original_filename, storage_provider, storage_key, mime_type, media_kind,
+        size_bytes, checksum_sha256, width, height, folder_id, processing_status
+      ) VALUES (
+        'fitness.jpg', 'LOCAL', 'folder/fitness.jpg', 'image/jpeg', 'IMAGE',
+        1024, ${"f".repeat(64)}, 1080, 1080, ${folderId}, 'READY'
+      ) RETURNING id
+    `;
+
+    await renameMediaFolder(folderId, "Fitness Brasil", actorUserId);
+    await deleteMediaFolder(folderId, actorUserId);
+
+    const [persisted] = await sql<Array<{ folder_id: string | null; deleted_at: Date | null }>>`
+      SELECT folder_id, deleted_at FROM media_assets WHERE id = ${asset.id}
+    `;
+    expect(persisted).toEqual({ folder_id: null, deleted_at: null });
   });
 });

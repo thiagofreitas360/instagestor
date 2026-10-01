@@ -1,9 +1,14 @@
 import { spawn } from "node:child_process";
 
-const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+function run(script: string) {
+  return process.platform === "win32"
+    ? spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `pnpm ${script}`], { stdio: "inherit", env: process.env })
+    : spawn("pnpm", [script], { stdio: "inherit", env: process.env });
+}
+
 const children = [
-  spawn(command, ["dev:web"], { stdio: "inherit", env: process.env }),
-  spawn(command, ["dev:worker"], { stdio: "inherit", env: process.env }),
+  run("dev:web"),
+  run("dev:worker"),
 ];
 
 let stopping = false;

@@ -19,7 +19,18 @@ export function CampaignTargetsSelector({
   const [all, setAll] = useState(false);
   const [selectedAccounts, setSelectedAccounts] = useState(() => new Set(initialAccountIds));
   const [selectedGroups, setSelectedGroups] = useState(() => new Set<string>());
+  const [groupFilter, setGroupFilter] = useState("");
+  const [search, setSearch] = useState("");
   const availableIds = useMemo(() => new Set(accounts.map((account) => account.id)), [accounts]);
+  const filteredAccounts = useMemo(() => {
+    const memberIds = groups.find((group) => group.id === groupFilter)?.account_ids;
+    const term = search.trim().toLocaleLowerCase("pt-BR");
+    return accounts.filter((account) => (
+      (!memberIds || memberIds.includes(account.id))
+      && (!term || account.username.toLocaleLowerCase("pt-BR").includes(term)
+        || account.display_name?.toLocaleLowerCase("pt-BR").includes(term))
+    ));
+  }, [accounts, groupFilter, groups, search]);
   const selectedCount = useMemo(() => {
     if (all) return accounts.length;
     const ids = new Set([...selectedAccounts].filter((id) => availableIds.has(id)));
@@ -39,6 +50,10 @@ export function CampaignTargetsSelector({
     });
   }
 
+  function selectFilteredAccounts() {
+    setSelectedAccounts((current) => new Set([...current, ...filteredAccounts.map((account) => account.id)]));
+  }
+
   return (
     <>
       {[...selectedAccounts].map((accountId) => <input key={accountId} name="accountIds" type="hidden" value={accountId} />)}
@@ -53,7 +68,7 @@ export function CampaignTargetsSelector({
       </label>
       {groups.length ? (
         <fieldset className="choice-grid">
-          <legend>Grupos</legend>
+          <legend>Nichos / grupos</legend>
           {groups.map((group) => (
             <label className="choice-card" key={group.id}>
               <input
@@ -69,9 +84,25 @@ export function CampaignTargetsSelector({
       ) : null}
       <details className="native-disclosure account-selector" open={initialAccountIds.length > 0}>
         <summary>Selecionar contas individualmente</summary>
+        <div className="page-actions">
+          <label>
+            Filtrar por nicho
+            <select value={groupFilter} onChange={(event) => setGroupFilter(event.currentTarget.value)}>
+              <option value="">Todos os nichos</option>
+              {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+            </select>
+          </label>
+          <label>
+            Buscar conta
+            <input type="search" value={search} onChange={(event) => setSearch(event.currentTarget.value)} placeholder="@usuario" />
+          </label>
+          <button className="button button-small button-secondary" type="button" onClick={selectFilteredAccounts} disabled={!filteredAccounts.length}>
+            Selecionar contas visíveis
+          </button>
+        </div>
         <fieldset className="checkbox-list checkbox-list-columns">
           <legend className="sr-only">Contas individuais</legend>
-          {accounts.map((account) => (
+          {filteredAccounts.map((account) => (
             <label className="checkbox-row" key={account.id}>
               <input
                 type="checkbox"
@@ -128,9 +159,9 @@ export function CampaignRhythmFields({
       <label>
         Tipo de intervalo
         <select value={mode} onChange={(event) => setMode(event.currentTarget.value as RhythmMode)}>
-          <option value="NONE">Sem intervalo</option>
+          <option value="RANDOM">Aleatório inteligente (25–60 min)</option>
           <option value="FIXED">Fixo</option>
-          <option value="RANDOM">Aleatório</option>
+          <option value="NONE">Sem intervalo</option>
         </select>
         <input type="hidden" name="delayMode" value={mode === "RANDOM" ? "RANDOM" : "FIXED"} />
       </label>
@@ -142,14 +173,14 @@ export function CampaignRhythmFields({
           <option value="RANDOM">Aleatória</option>
         </select>
       </label>
-      {mode === "NONE" ? <input type="hidden" name="delayFixedSeconds" value="0" /> : null}
+      {mode === "NONE" ? <input type="hidden" name="delayFixedMinutes" value="0" /> : null}
       {mode === "FIXED" ? (
-        <label>Intervalo fixo (segundos)<input name="delayFixedSeconds" type="number" min="0" max="86400" defaultValue={delayFixedSeconds} required /></label>
+        <label>Intervalo fixo (minutos)<input name="delayFixedMinutes" type="number" min="1" max="1440" defaultValue={Math.max(1, Math.round(delayFixedSeconds / 60))} required /></label>
       ) : null}
       {mode === "RANDOM" ? (
         <>
-          <label>Intervalo mínimo (segundos)<input name="delayMinSeconds" type="number" min="0" max="86400" defaultValue={delayMinSeconds} required /></label>
-          <label>Intervalo máximo (segundos)<input name="delayMaxSeconds" type="number" min="0" max="86400" defaultValue={delayMaxSeconds} required /></label>
+          <label>Intervalo mínimo (minutos)<input name="delayMinMinutes" type="number" min="25" max="60" defaultValue={Math.max(25, Math.round(delayMinSeconds / 60))} required /></label>
+          <label>Intervalo máximo (minutos)<input name="delayMaxMinutes" type="number" min="25" max="60" defaultValue={Math.min(60, Math.max(25, Math.round(delayMaxSeconds / 60)))} required /></label>
         </>
       ) : null}
     </div>

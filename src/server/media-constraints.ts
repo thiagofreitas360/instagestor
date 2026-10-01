@@ -30,6 +30,7 @@ export const MEDIA_CONSTRAINTS = {
   IMAGE: { mimeTypes: ["image/jpeg"], maxBytes: 8_000_000, minWidth: 320, maxWidth: 1_440 },
   VIDEO: { mimeTypes: ["video/mp4", "video/quicktime"], maxBytes: 300_000_000, minDuration: 3, maxDuration: 900 },
 } as const;
+export const MAX_BATCH_VIDEOS = 50;
 
 export type MediaMetadata = {
   kind: "IMAGE" | "VIDEO";
@@ -165,8 +166,12 @@ export function validateCampaignMedia(
     durationSeconds?: number | null;
   }>,
 ) {
+  const batchVideo = ["FEED_VIDEO", "REEL"].includes(type);
   const requiredKind = type.endsWith("IMAGE") ? "IMAGE" : type === "CAROUSEL" ? null : "VIDEO";
-  if (requiredKind && (media.length !== 1 || media[0]?.mediaKind !== requiredKind)) {
+  if (batchVideo && (media.length < 1 || media.length > MAX_BATCH_VIDEOS || media.some((item) => item.mediaKind !== "VIDEO"))) {
+    throw new Error(`Esta campanha aceita de 1 a ${MAX_BATCH_VIDEOS} vídeos`);
+  }
+  if (!batchVideo && requiredKind && (media.length !== 1 || media[0]?.mediaKind !== requiredKind)) {
     throw new Error(`Esta publicação exige exatamente uma mídia ${requiredKind === "IMAGE" ? "de imagem" : "de vídeo"}`);
   }
   if (type === "CAROUSEL" && (media.length < 2 || media.length > 10)) throw new Error("Carousel exige de 2 a 10 mídias");
@@ -180,10 +185,11 @@ export function validateCampaignMedia(
     }
   }
   if (["REEL", "STORY_VIDEO"].includes(type)) {
-    const video = media[0];
-    const ratio = video?.width && video.height ? video.width / video.height : 0;
-    const minimum = type === "STORY_VIDEO" ? 0.1 : 0.01;
-    if (!ratio || ratio < minimum || ratio > 10) throw new Error("Proporção do vídeo fora do limite suportado");
+    for (const video of media) {
+      const ratio = video.width && video.height ? video.width / video.height : 0;
+      const minimum = type === "STORY_VIDEO" ? 0.1 : 0.01;
+      if (!ratio || ratio < minimum || ratio > 10) throw new Error("Proporção do vídeo fora do limite suportado");
+    }
   }
   if (type === "STORY_VIDEO") {
     const video = media[0];

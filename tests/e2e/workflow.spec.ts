@@ -9,8 +9,11 @@ test("fluxo fake completo: contas, grupo, mídia, campanha, prévia, fila e canc
   const suffix = `${Date.now()}-${testInfo.workerIndex}`;
   const groupName = `Grupo E2E ${suffix}`;
   const campaignName = `Campanha E2E ${suffix}`;
+  const folderName = `Fitness E2E ${suffix}`;
   const filename = `midia-e2e-${suffix}.jpg`;
+  const secondFilename = `midia-e2e-extra-${suffix}.jpg`;
   const jpegPath = testInfo.outputPath(filename);
+  const secondJpegPath = testInfo.outputPath(secondFilename);
 
   await sharp({
     create: {
@@ -22,6 +25,16 @@ test("fluxo fake completo: contas, grupo, mídia, campanha, prévia, fila e canc
   })
     .jpeg({ quality: 82, chromaSubsampling: "4:2:0" })
     .toFile(jpegPath);
+  await sharp({
+    create: {
+      width: 1080,
+      height: 1350,
+      channels: 3,
+      background: { r: 32, g: 156, b: 93 },
+    },
+  })
+    .jpeg({ quality: 82, chromaSubsampling: "4:2:0" })
+    .toFile(secondJpegPath);
 
   await login(page);
 
@@ -44,9 +57,10 @@ test("fluxo fake completo: contas, grupo, mídia, campanha, prévia, fila e canc
 
   await test.step("criar grupo e persistir dois membros", async () => {
     await page.goto("/grupos");
-    await page.getByLabel("Nome do grupo").fill(groupName);
-    await page.getByLabel(/Descri.*opcional/i).fill("Grupo criado pela suíte Playwright");
-    await page.getByRole("button", { name: "Criar grupo" }).click();
+    const createGroupForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Criar grupo" }) });
+    await createGroupForm.getByLabel("Nome do grupo").fill(groupName);
+    await createGroupForm.getByLabel(/Descri.*opcional/i).fill("Grupo criado pela suíte Playwright");
+    await createGroupForm.getByRole("button", { name: "Criar grupo" }).click();
 
     const groupCard = page.locator("article.group-card").filter({ has: page.getByRole("heading", { name: groupName }) });
     await expect(groupCard).toBeVisible();
@@ -59,13 +73,23 @@ test("fluxo fake completo: contas, grupo, mídia, campanha, prévia, fila e canc
     await expect(groupCard.locator(".count-pill")).toHaveText("2 contas");
   });
 
-  await test.step("enviar JPEG válido e encontrá-lo na biblioteca", async () => {
+  await test.step("criar pasta e enviar vários JPEGs para ela", async () => {
     await page.goto("/midias");
-    await expect(page.getByRole("heading", { name: "Mídias" })).toBeVisible();
-    await page.locator('input[type="file"][name="file"]').setInputFiles(jpegPath);
-    await expect(page.getByRole("button", { name: /Enviar m.*dia/i })).toBeEnabled();
-    await page.getByRole("button", { name: /Enviar m.*dia/i }).click();
+    await expect(page.getByRole("heading", { name: "Mídias", exact: true })).toBeVisible();
+    await page.getByLabel("Nova pasta").fill(folderName);
+    await page.getByRole("button", { name: "Criar pasta" }).click();
+    await expect(page.getByRole("link", { name: new RegExp(folderName) })).toBeVisible();
+    await page.getByLabel("Pasta", { exact: true }).selectOption({ label: folderName });
+    await page.locator('input[type="file"]').setInputFiles([jpegPath, secondJpegPath]);
+    await expect(page.getByRole("button", { name: /Enviar m.*dias/i })).toBeEnabled();
+    await page.getByRole("button", { name: /Enviar m.*dias/i }).click();
+    await expect(page.getByRole("status")).toHaveText("2 de 2 arquivo(s) enviado(s).");
     await expect(page.getByRole("heading", { name: filename })).toBeVisible();
+    await expect(page.getByRole("heading", { name: secondFilename })).toBeVisible();
+    const firstMediaCard = page.locator("article.media-card").filter({ has: page.getByRole("heading", { name: filename }) });
+    const secondMediaCard = page.locator("article.media-card").filter({ has: page.getByRole("heading", { name: secondFilename }) });
+    await expect(firstMediaCard.locator(".status-badge", { hasText: folderName })).toBeVisible();
+    await expect(secondMediaCard.locator(".status-badge", { hasText: folderName })).toBeVisible();
     await expect(page.getByText("Pronta", { exact: true }).first()).toBeVisible();
   });
 
@@ -94,8 +118,8 @@ test("fluxo fake completo: contas, grupo, mídia, campanha, prévia, fila e canc
     await page.getByLabel(/Fuso hor/i).selectOption("America/Sao_Paulo");
     await page.getByLabel("Tipo de intervalo").selectOption("RANDOM");
     await page.getByLabel("Ordem das contas").selectOption("USERNAME");
-    await page.getByLabel(/Intervalo m.*nimo/i).fill("5");
-    await page.getByLabel(/Intervalo m.*ximo/i).fill("10");
+    await page.getByLabel(/Intervalo m.*nimo/i).fill("25");
+    await page.getByLabel(/Intervalo m.*ximo/i).fill("26");
     await page.getByRole("button", { name: /Gerar pr.*via do cronograma/i }).click();
 
     await expect(page).toHaveURL(/\?preview=1$/);
@@ -103,7 +127,7 @@ test("fluxo fake completo: contas, grupo, mídia, campanha, prévia, fila e canc
     const previewRows = page.locator("section.schedule-preview tbody tr");
     await expect(previewRows).toHaveCount(2);
     await expect(previewRows.nth(0).locator('td[data-label="Intervalo"]')).toHaveText(/In.*cio/i);
-    await expect(previewRows.nth(1).locator('td[data-label="Intervalo"]')).toHaveText(/^(?:[5-9]|10) s$/);
+    await expect(previewRows.nth(1).locator('td[data-label="Intervalo"]')).toHaveText(/^(?:25|26) min$/);
 
     persistedTimes = await previewRows.locator('td[data-label="Publicação prevista"]').allTextContents();
     expect(persistedTimes).toHaveLength(2);

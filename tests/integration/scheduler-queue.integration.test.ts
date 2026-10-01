@@ -3,7 +3,14 @@ import { getSqlClient } from "@/db/client";
 import { claimJob, processClaimedJob, recoverStaleJobs } from "@/jobs/queue";
 import { resetEnvForTests } from "@/lib/env";
 import { createCampaign as createContentCampaign, resolveTargetIds } from "@/server/campaigns";
-import { cancelCampaign, pauseCampaign, resumeCampaign, scheduleCampaign } from "@/server/scheduler";
+import {
+  cancelCampaign,
+  confirmCampaignSchedule,
+  pauseCampaign,
+  previewCampaignSchedule,
+  resumeCampaign,
+  scheduleCampaign,
+} from "@/server/scheduler";
 import { assertTestDatabaseUrl } from "./database-safety.mjs";
 import { createAccounts, createCampaign, createJobs, createUser } from "./helpers";
 
@@ -67,6 +74,78 @@ describe("scheduler e snapshot de destinos", () => {
       SELECT media_asset_id AS id FROM campaign_media WHERE campaign_id = ${campaignId} ORDER BY position
     `;
     expect(persisted.map(({ id }) => id)).toEqual(chosenOrder);
+  });
+
+  it("persiste a prévia de um lote de Reels e confirma um job por vídeo e conta", async () => {
+    const sql = getSqlClient();
+    const actorUserId = await createUser("reels-batch@example.test");
+    const accounts = await createAccounts(2, "reels_batch");
+    const media = await sql<Array<{ id: string }>>`
+      INSERT INTO media_assets ${sql(Array.from({ length: 3 }, (_, index) => ({
+        original_filename: `reel-${index}.mp4`,
+        storage_provider: "LOCAL",
+        storage_key: `reels/${index}.mp4`,
+        mime_type: "video/mp4",
+        media_kind: "VIDEO",
+        size_bytes: 1024,
+        checksum_sha256: String(index + 1).repeat(64),
+        width: 1080,
+        height: 1920,
+        duration_seconds: 30,
+        processing_status: "READY",
+      })))}
+      RETURNING id
+    `;
+    const campaignId = await createContentCampaign({
+      name: "Lote de Reels",
+      publicationType: "REEL",
+      mediaIds: media.map((asset) => asset.id),
+      shareToFeed: true,
+      actorUserId,
+    });
+
+    await previewCampaignSchedule({
+      campaignId,
+      targetIds: accounts.map((account) => account.id),
+      startAt: new Date("2026-09-30T16:00:00Z"),
+      timezone: "UTC",
+      delay: { mode: "RANDOM", minSeconds: 1500, maxSeconds: 3600 },
+      targetOrder: "SELECTED",
+      actorUserId,
+    });
+
+    const preview = await sql<Array<{
+      status: string;
+      publication_position: number;
+      instagram_account_id: string;
+      scheduled_at: Date;
+    }>>`
+      SELECT status, publication_position, instagram_account_id, scheduled_at
+      FROM publication_jobs WHERE campaign_id = ${campaignId}
+      ORDER BY scheduled_at, created_at
+    `;
+    expect(preview).toHaveLength(6);
+    expect(preview.map((job) => job.status)).toEqual(Array(6).fill("DRAFT"));
+    expect(preview.map((job) => [job.publication_position, job.instagram_account_id])).toEqual([
+      [0, accounts[0].id], [0, accounts[1].id],
+      [1, accounts[0].id], [1, accounts[1].id],
+      [2, accounts[0].id], [2, accounts[1].id],
+    ]);
+    for (let index = 1; index < preview.length; index++) {
+      const gap = (new Date(preview[index].scheduled_at).getTime() - new Date(preview[index - 1].scheduled_at).getTime()) / 1000;
+      expect(gap).toBeGreaterThanOrEqual(1500);
+      expect(gap).toBeLessThanOrEqual(3600);
+    }
+
+    await expect(confirmCampaignSchedule(campaignId, actorUserId)).resolves.toEqual({ jobs: 6 });
+    const [confirmed] = await sql<Array<{ queued: number; status: string }>>`
+      SELECT count(job.id) FILTER (WHERE job.status = 'QUEUED')::int AS queued, campaign.status
+      FROM campaigns campaign
+      JOIN publication_jobs job ON job.campaign_id = campaign.id
+      WHERE campaign.id = ${campaignId}
+      GROUP BY campaign.id
+    `;
+    expect(confirmed).toEqual({ queued: 6, status: "SCHEDULED" });
   });
 
   it("bloqueia Story para conta Creator no provider Meta", async () => {

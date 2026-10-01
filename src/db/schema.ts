@@ -14,6 +14,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -61,6 +62,7 @@ export const publicationType = pgEnum("publication_type", [
 export const delayMode = pgEnum("delay_mode", ["FIXED", "RANDOM"]);
 export const targetOrder = pgEnum("target_order", ["SELECTED", "RANDOM", "USERNAME"]);
 export const publicationJobStatus = pgEnum("publication_job_status", [
+  "DRAFT",
   "QUEUED",
   "CLAIMED",
   "CREATING_CONTAINER",
@@ -146,6 +148,19 @@ export const accountGroupMembers = pgTable(
   (table) => [primaryKey({ columns: [table.groupId, table.instagramAccountId] })],
 );
 
+export const mediaFolders = pgTable(
+  "media_folders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("media_folders_name_unique").on(sql`lower(${table.name})`),
+    check("media_folders_name_valid", sql`length(trim(${table.name})) BETWEEN 1 AND 120`),
+  ],
+);
+
 export const mediaAssets = pgTable(
   "media_assets",
   {
@@ -160,6 +175,7 @@ export const mediaAssets = pgTable(
     width: integer("width"),
     height: integer("height"),
     durationSeconds: real("duration_seconds"),
+    folderId: uuid("folder_id").references(() => mediaFolders.id, { onDelete: "set null" }),
     processingStatus: mediaProcessingStatus("processing_status").notNull().default("UPLOADING"),
     validationError: text("validation_error"),
     ...timestamps,
@@ -167,6 +183,7 @@ export const mediaAssets = pgTable(
   },
   (table) => [
     index("media_assets_status_idx").on(table.processingStatus),
+    index("media_assets_folder_idx").on(table.folderId),
     check("media_assets_size_positive", sql`${table.sizeBytes} > 0`),
   ],
 );
@@ -251,6 +268,7 @@ export const publicationJobs = pgTable(
     instagramAccountId: uuid("instagram_account_id")
       .notNull()
       .references(() => instagramAccounts.id, { onDelete: "restrict" }),
+    publicationPosition: integer("publication_position").notNull().default(0),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
     status: publicationJobStatus("status").notNull().default("QUEUED"),
     attemptCount: integer("attempt_count").notNull().default(0),
@@ -276,13 +294,18 @@ export const publicationJobs = pgTable(
     ...timestamps,
   },
   (table) => [
-    unique("publication_jobs_campaign_account_unique").on(table.campaignId, table.instagramAccountId),
+    unique("publication_jobs_campaign_account_position_unique").on(
+      table.campaignId,
+      table.instagramAccountId,
+      table.publicationPosition,
+    ),
     index("publication_jobs_status_scheduled_idx").on(table.status, table.scheduledAt),
     index("publication_jobs_status_retry_idx").on(table.status, table.nextAttemptAt),
     index("publication_jobs_account_idx").on(table.instagramAccountId),
     index("publication_jobs_campaign_idx").on(table.campaignId),
     index("publication_jobs_stale_lock_idx").on(table.lockExpiresAt),
     check("publication_jobs_attempts_valid", sql`${table.attemptCount} >= 0 AND ${table.maxAttempts} > 0`),
+    check("publication_jobs_position_nonnegative", sql`${table.publicationPosition} >= 0`),
   ],
 );
 
@@ -399,9 +422,9 @@ export const settings = pgTable(
   {
     id: boolean("id").primaryKey().default(true),
     defaultTimezone: text("default_timezone").notNull().default("America/Sao_Paulo"),
-    defaultDelayMode: delayMode("default_delay_mode").notNull().default("FIXED"),
-    defaultDelayMin: integer("default_delay_min").notNull().default(120),
-    defaultDelayMax: integer("default_delay_max").notNull().default(300),
+    defaultDelayMode: delayMode("default_delay_mode").notNull().default("RANDOM"),
+    defaultDelayMin: integer("default_delay_min").notNull().default(1500),
+    defaultDelayMax: integer("default_delay_max").notNull().default(3600),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [

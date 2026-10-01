@@ -10,6 +10,8 @@ type MediaRow = {
   original_filename: string;
   media_kind: "IMAGE" | "VIDEO";
   size_bytes: number;
+  folder_id: string | null;
+  folder_name: string | null;
 };
 type PageProps = { searchParams: Promise<{ erro?: string | string[] }> };
 function first(value?: string | string[]) { return Array.isArray(value) ? value[0] : value; }
@@ -18,16 +20,20 @@ export default async function NewCampaignPage({ searchParams }: PageProps) {
   const query = await searchParams;
   const metaMode = process.env.INSTAGRAM_PROVIDER === "meta";
   const media = await getSqlClient()<MediaRow[]>`
-    SELECT id, original_filename, media_kind, size_bytes
-    FROM media_assets
-    WHERE processing_status = 'READY' AND deleted_at IS NULL
-    ORDER BY created_at DESC
+    SELECT asset.id, asset.original_filename, asset.media_kind, asset.size_bytes,
+      asset.folder_id, folder.name AS folder_name
+    FROM media_assets asset
+    LEFT JOIN media_folders folder ON folder.id = asset.folder_id
+    WHERE asset.processing_status = 'READY' AND asset.deleted_at IS NULL
+    ORDER BY asset.created_at DESC
   `;
   const mediaWithUrls = media.map((asset) => ({
     id: asset.id,
     original_filename: asset.original_filename,
     media_kind: asset.media_kind,
     size_bytes: asset.size_bytes,
+    folder_id: asset.folder_id,
+    folder_name: asset.folder_name,
     previewUrl: getPrivateMediaUrl(asset.id),
   }));
 
@@ -64,13 +70,13 @@ export default async function NewCampaignPage({ searchParams }: PageProps) {
                   </select>
                 </label>
                 <label className="switch-field">
-                  <input name="shareToFeed" type="checkbox" />
-                  <span><strong>Compartilhar Reel no Feed</strong><small>Usado somente quando o formato for Reel.</small></span>
+                  <input name="shareToFeed" type="checkbox" defaultChecked />
+                  <span><strong>Publicar o Reel também no Feed</strong><small>Cria uma única publicação e compartilha no Feed.</small></span>
                 </label>
               </div>
             </Panel>
 
-            <Panel title="2. Mídia" description="Selecione um arquivo; para carrossel, a ordem dos cliques define a ordem publicada.">
+            <Panel title="2. Mídia" description="Reels e vídeos de Feed aceitam lotes; para carrossel, a ordem dos cliques define a ordem publicada.">
               <CampaignMediaSelector media={mediaWithUrls} />
               <p className="form-hint">A compatibilidade entre formato e mídia será validada antes de salvar.</p>
             </Panel>

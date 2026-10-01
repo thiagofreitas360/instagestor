@@ -1,6 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
+import { existsSync } from "node:fs";
+import { loadEnvFile } from "node:process";
 import { assertTestDatabaseUrl } from "./tests/integration/database-safety.mjs";
 
+if (existsSync(".env")) loadEnvFile(".env");
 assertTestDatabaseUrl(process.env.DATABASE_URL);
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? process.env.APP_URL ?? "http://localhost:3000";
 const targetURL = new URL(baseURL);

@@ -57,7 +57,7 @@ export async function createCampaign(input: {
 
     const [campaign] = await sql<{ id: string }[]>`
       INSERT INTO campaigns (name, publication_type, caption, share_to_feed, created_by)
-      VALUES (${name}, ${input.publicationType}, ${input.caption?.trim() || null}, ${input.shareToFeed ?? false}, ${input.actorUserId})
+      VALUES (${name}, ${input.publicationType}, ${input.caption?.trim() || null}, ${input.publicationType === "REEL" && (input.shareToFeed ?? false)}, ${input.actorUserId})
       RETURNING id
     `;
     const rows = orderedMedia.map((asset, position) => ({ campaign_id: campaign.id, media_asset_id: asset.id, position }));

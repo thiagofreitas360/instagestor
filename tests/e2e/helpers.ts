@@ -59,6 +59,7 @@ export async function resetPublishingFixture() {
         account_groups,
         instagram_accounts,
         media_assets,
+        media_folders,
         audit_logs
       RESTART IDENTITY CASCADE
     `;

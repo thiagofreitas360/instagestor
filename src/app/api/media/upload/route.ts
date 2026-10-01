@@ -1,6 +1,7 @@
 import { getEnv } from "@/lib/env";
 import { requireAdminApi } from "@/server/auth";
 import { storeMedia } from "@/server/media";
+import { z } from "zod";
 
 export const runtime = "nodejs";
 
@@ -11,6 +12,7 @@ function redirectToMedia(message: string, error = false) {
 }
 
 export async function POST(request: Request) {
+  const wantsJson = request.headers.get("accept")?.includes("application/json") ?? false;
   try {
     await requireAdminApi();
   } catch (error) {
@@ -23,16 +25,22 @@ export async function POST(request: Request) {
   const contentLength = Number(request.headers.get("content-length"));
   const maximumRequestBytes = getEnv().UPLOAD_MAX_BYTES + 1_000_000;
   if (!Number.isFinite(contentLength) || contentLength < 1 || contentLength > maximumRequestBytes) {
-    return new Response("Tamanho da requisição inválido", { status: 413 });
+    return wantsJson
+      ? Response.json({ error: "Tamanho da requisição inválido" }, { status: 413 })
+      : new Response("Tamanho da requisição inválido", { status: 413 });
   }
 
   try {
     const formData = await request.formData();
     const file = formData.get("file");
     if (!(file instanceof File)) throw new Error("Selecione um arquivo");
-    await storeMedia(file);
+    const folderValue = String(formData.get("folderId") ?? "");
+    const folderId = folderValue ? z.uuid().parse(folderValue) : undefined;
+    const mediaId = await storeMedia(file, folderId);
+    if (wantsJson) return Response.json({ id: mediaId }, { status: 201 });
     return redirectToMedia("Mídia enviada com sucesso.");
   } catch (error) {
-    return redirectToMedia(error instanceof Error ? error.message : "Upload não concluído", true);
+    const errorMessage = error instanceof Error ? error.message : "Upload não concluído";
+    return wantsJson ? Response.json({ error: errorMessage }, { status: 400 }) : redirectToMedia(errorMessage, true);
   }
 }

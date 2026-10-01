@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx --env-file-if-exists=.env scripts/dev.ts",
     "dev:web": "next dev",
-    "dev:worker": "tsx --env-file-if-exists=.env watch worker/index.ts",
+    "dev:worker": "tsx watch --env-file-if-exists=.env worker/index.ts",
     "build": "next build",
     "start": "next start",
     "worker": "tsx --env-file-if-exists=.env worker/index.ts",

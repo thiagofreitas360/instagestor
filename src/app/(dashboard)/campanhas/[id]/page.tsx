@@ -66,6 +66,8 @@ type Job = {
   max_attempts: number;
   meta_media_id: string | null;
   last_error_message: string | null;
+  publication_position: number;
+  media_name: string | null;
 };
 type JobStats = { total: number; published: number; pending: number; failed: number; cancelled: number };
 type Setting = { default_timezone: string; default_delay_mode: "FIXED" | "RANDOM"; default_delay_min: number; default_delay_max: number };
@@ -121,8 +123,13 @@ export default async function CampaignDetailPage({ params, searchParams }: PageP
     sql<Job[]>`
       SELECT job.id, account.id AS account_id, account.username, job.status, job.scheduled_at,
         job.published_at, job.attempt_count, job.max_attempts, job.meta_media_id, job.last_error_message
+        , job.publication_position, publication_media.original_filename AS media_name
       FROM publication_jobs job
       JOIN instagram_accounts account ON account.id = job.instagram_account_id
+      LEFT JOIN campaign_media publication_relation
+        ON publication_relation.campaign_id = job.campaign_id
+        AND publication_relation.position = job.publication_position
+      LEFT JOIN media_assets publication_media ON publication_media.id = publication_relation.media_asset_id
       WHERE job.campaign_id = ${id}
       ORDER BY job.scheduled_at
       LIMIT 100
@@ -147,14 +154,14 @@ export default async function CampaignDetailPage({ params, searchParams }: PageP
   const startAt = campaign.start_at
     ? DateTime.fromJSDate(campaign.start_at).setZone(timezone).toFormat("yyyy-MM-dd'T'HH:mm")
     : localInputValue(timezone);
-  const delayMode = campaign.start_at ? campaign.delay_mode : setting?.default_delay_mode ?? "FIXED";
-  const delayFixedSeconds = campaign.start_at ? campaign.delay_fixed_seconds ?? 120 : setting?.default_delay_min ?? 120;
-  const delayMinSeconds = campaign.start_at ? campaign.delay_min_seconds ?? 120 : setting?.default_delay_min ?? 120;
-  const delayMaxSeconds = campaign.start_at ? campaign.delay_max_seconds ?? 300 : setting?.default_delay_max ?? 300;
+  const delayMode = campaign.start_at ? campaign.delay_mode : setting?.default_delay_mode ?? "RANDOM";
+  const delayFixedSeconds = campaign.start_at ? campaign.delay_fixed_seconds ?? 1500 : setting?.default_delay_min ?? 1500;
+  const delayMinSeconds = campaign.start_at ? campaign.delay_min_seconds ?? 1500 : setting?.default_delay_min ?? 1500;
+  const delayMaxSeconds = campaign.start_at ? campaign.delay_max_seconds ?? 3600 : setting?.default_delay_max ?? 3600;
   const targetOrder = campaign.target_order;
   const selectedAccountIds = new Set(targets.map((target) => target.id));
   const previewRequested = first(query.preview) === "1";
-  const previewTargets = targets.filter((target): target is Target & { scheduled_at: Date } => target.scheduled_at !== null);
+  const previewJobs = jobs.filter((job) => job.status === "DRAFT");
 
   const progress = stats.total ? Math.round((stats.published / stats.total) * 100) : 0;
   const canPause = ["SCHEDULED", "RUNNING"].includes(campaign.status);
@@ -270,25 +277,26 @@ export default async function CampaignDetailPage({ params, searchParams }: PageP
             <button className="button button-secondary" type="submit" name="intent" value="preview">Gerar prévia do cronograma</button>
           </form>
 
-          {previewTargets.length ? (
+          {previewJobs.length ? (
             <section className="schedule-preview" aria-labelledby="schedule-preview-title">
               <header>
-                <div><p className="eyebrow">Prévia antes da confirmação</p><h3 id="schedule-preview-title">Cronograma de {previewTargets.length} publicações</h3></div>
+                <div><p className="eyebrow">Prévia antes da confirmação</p><h3 id="schedule-preview-title">Cronograma de {stats.total} publicações</h3></div>
                 <span className="preview-exact">Horários exatos</span>
               </header>
               <div className="table-scroll schedule-preview-table">
                 <table>
-                  <thead><tr><th scope="col">Ordem</th><th scope="col">Conta</th><th scope="col">Publicação prevista</th><th scope="col">Intervalo</th></tr></thead>
+                  <thead><tr><th scope="col">Ordem</th><th scope="col">Mídia</th><th scope="col">Conta</th><th scope="col">Publicação prevista</th><th scope="col">Intervalo</th></tr></thead>
                   <tbody>
-                    {previewTargets.map((target, index) => {
-                      const previous = previewTargets[index - 1]?.scheduled_at;
-                      const intervalSeconds = previous ? Math.round((target.scheduled_at.getTime() - previous.getTime()) / 1000) : null;
+                    {previewJobs.map((job, index) => {
+                      const previous = previewJobs[index - 1]?.scheduled_at;
+                      const intervalMinutes = previous ? Math.round((job.scheduled_at.getTime() - previous.getTime()) / 60_000) : null;
                       return (
-                        <tr key={target.id}>
-                          <td data-label="Ordem">{target.position + 1}</td>
-                          <td data-label="Conta"><span className="account-cell"><span className="account-avatar account-avatar-small" aria-hidden="true">{initials(target.display_name ?? target.username)}</span><span><strong>@{target.username}</strong><small>{target.display_name}</small></span></span></td>
-                          <td data-label="Publicação prevista"><strong>{formatDate(target.scheduled_at, { timezone })}</strong></td>
-                          <td data-label="Intervalo">{intervalSeconds === null ? "Início" : `${intervalSeconds} s`}</td>
+                        <tr key={job.id}>
+                          <td data-label="Ordem">{index + 1}</td>
+                          <td data-label="Mídia">{campaign.publication_type === "CAROUSEL" ? "Carrossel" : job.media_name ?? `Mídia ${job.publication_position + 1}`}</td>
+                          <td data-label="Conta"><span className="account-cell"><span className="account-avatar account-avatar-small" aria-hidden="true">{initials(job.username)}</span><span><strong>@{job.username}</strong></span></span></td>
+                          <td data-label="Publicação prevista"><strong>{formatDate(job.scheduled_at, { timezone })}</strong></td>
+                          <td data-label="Intervalo">{intervalMinutes === null ? "Início" : `${intervalMinutes} min`}</td>
                         </tr>
                       );
                     })}
@@ -296,10 +304,10 @@ export default async function CampaignDetailPage({ params, searchParams }: PageP
                 </table>
               </div>
               <div className="schedule-confirmation">
-                <div><strong>Revise antes de criar os jobs</strong><p>Esta prévia está persistida. Confirmar cria um job por conta exatamente nos horários exibidos.</p></div>
+                <div><strong>Revise antes de ativar os jobs</strong><p>A prévia está persistida. Confirmar libera todos os jobs exatamente nos horários exibidos.</p></div>
                 <form action={scheduleCampaignAction}>
                   <input type="hidden" name="campaignId" value={campaign.id} />
-                  <button className="button button-primary" type="submit" name="intent" value="confirm">Confirmar e agendar {previewTargets.length} publicações</button>
+                  <button className="button button-primary" type="submit" name="intent" value="confirm">Confirmar e agendar {stats.total} publicações</button>
                 </form>
               </div>
             </section>

@@ -41,11 +41,22 @@ describe("validateCampaignMedia", () => {
     expect(() => validateCampaignMedia(type, [{ mediaKind: "IMAGE" }, { mediaKind: "IMAGE" }])).toThrow();
   });
 
-  it.each(["FEED_VIDEO", "REEL", "STORY_VIDEO"])("exige exatamente um vídeo para %s", (type) => {
+  it.each(["FEED_VIDEO", "REEL"])("aceita lote de vídeos para %s", (type) => {
     expect(() => validateCampaignMedia(type, [{ mediaKind: "VIDEO", width: 1080, height: 1920 }])).not.toThrow();
     expect(() => validateCampaignMedia(type, [])).toThrow();
     expect(() => validateCampaignMedia(type, [{ mediaKind: "IMAGE" }])).toThrow();
-    expect(() => validateCampaignMedia(type, [{ mediaKind: "VIDEO" }, { mediaKind: "VIDEO" }])).toThrow();
+    expect(() => validateCampaignMedia(type, [
+      { mediaKind: "VIDEO", width: 1080, height: 1920 },
+      { mediaKind: "VIDEO", width: 1080, height: 1920 },
+    ])).not.toThrow();
+  });
+
+  it("mantém Story de vídeo limitado a um arquivo", () => {
+    expect(() => validateCampaignMedia("STORY_VIDEO", [{ mediaKind: "VIDEO", width: 1080, height: 1920 }])).not.toThrow();
+    expect(() => validateCampaignMedia("STORY_VIDEO", [
+      { mediaKind: "VIDEO", width: 1080, height: 1920 },
+      { mediaKind: "VIDEO", width: 1080, height: 1920 },
+    ])).toThrow();
   });
 
   it("aceita carousel com 2 a 10 mídias e rejeita quantidades fora dos limites", () => {

@@ -48,14 +48,26 @@ describe("ciclo operacional de campanha", () => {
     expect(database.queries).toHaveLength(1);
   });
 
-  it("retoma apenas PAUSED e deixa jobs vencidos elegíveis imediatamente", async () => {
-    database.responses.push([{ id: "campaign-1" }], []);
+  it("retoma apenas PAUSED e reposiciona o cronograma vencido sem avalanche", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-01T12:00:00Z"));
+    database.responses.push(
+      [{ id: "campaign-1" }],
+      [{ earliest: new Date("2026-09-01T11:50:00Z") }],
+      [],
+      [],
+    );
 
-    await resumeCampaign("campaign-1", "admin-1");
+    try {
+      await resumeCampaign("campaign-1", "admin-1");
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(database.queries[0].text).toContain("status = 'PAUSED'");
-    expect(database.queries[1].text).toContain("'CAMPAIGN_RESUMED'");
-    expect(database.queries[1].values.at(-1)).toContain('"overdue":"eligible_immediately"');
+    expect(database.queries[2].text).toContain("scheduled_at = scheduled_at");
+    expect(database.queries[3].text).toContain("'CAMPAIGN_RESUMED'");
+    expect(database.queries[3].values.at(-1)).toContain('"overdue":"rebased"');
   });
 
   it("cancela somente jobs ainda não iniciados e não toca publicação em andamento", async () => {
@@ -63,7 +75,7 @@ describe("ciclo operacional de campanha", () => {
 
     await cancelCampaign("campaign-1", "admin-1");
 
-    expect(database.queries[1].text).toContain("status IN ('QUEUED', 'RETRY_WAIT')");
+    expect(database.queries[1].text).toContain("status IN ('DRAFT', 'QUEUED', 'RETRY_WAIT')");
     expect(database.queries[1].text).not.toContain("PUBLISHING");
     expect(database.queries[2].text).toContain("'CAMPAIGN_CANCELLED'");
   });

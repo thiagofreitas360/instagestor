@@ -17,9 +17,9 @@ export default async function SettingsPage({ searchParams }: PageProps) {
   const [stored] = await getSqlClient()<Settings[]>`SELECT * FROM settings WHERE id = true`;
   const settings = stored ?? {
     default_timezone: "America/Sao_Paulo",
-    default_delay_mode: "FIXED" as const,
-    default_delay_min: 120,
-    default_delay_max: 300,
+    default_delay_mode: "RANDOM" as const,
+    default_delay_min: 1500,
+    default_delay_max: 3600,
     updated_at: new Date(),
   };
   const provider = process.env.INSTAGRAM_PROVIDER === "meta" ? "Meta Instagram API" : "Provedor simulado";
@@ -58,15 +58,15 @@ export default async function SettingsPage({ searchParams }: PageProps) {
             </label>
             <div className="form-grid form-grid-two">
               <label>
-                Intervalo mínimo (segundos)
-                <input name="delayMin" type="number" min="0" max="86400" defaultValue={settings.default_delay_min} required />
+                Intervalo mínimo (minutos)
+                <input name="delayMinMinutes" type="number" min="25" max="60" defaultValue={Math.round(settings.default_delay_min / 60)} required />
               </label>
               <label>
-                Intervalo máximo (segundos)
-                <input name="delayMax" type="number" min="0" max="86400" defaultValue={settings.default_delay_max} required />
+                Intervalo máximo (minutos)
+                <input name="delayMaxMinutes" type="number" min="25" max="60" defaultValue={Math.round(settings.default_delay_max / 60)} required />
               </label>
             </div>
-            <p className="form-hint">Um ritmo conservador reduz picos de chamadas. O máximo nunca pode ser menor que o mínimo.</p>
+            <p className="form-hint">O timer inteligente aceita uma faixa de 25 a 60 minutos entre publicações.</p>
             <button className="button button-primary" type="submit">Salvar preferências</button>
           </form>
         </Panel>

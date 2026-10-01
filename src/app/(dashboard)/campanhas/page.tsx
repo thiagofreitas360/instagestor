@@ -25,7 +25,7 @@ export default async function CampaignsPage({ searchParams }: PageProps) {
     SELECT campaign.id, campaign.name, campaign.publication_type, campaign.status,
       campaign.start_at, campaign.created_at,
       count(DISTINCT target.instagram_account_id)::int AS target_count,
-      count(DISTINCT job.id)::int AS jobs_total,
+      count(DISTINCT job.id) FILTER (WHERE job.status <> 'DRAFT')::int AS jobs_total,
       count(DISTINCT job.id) FILTER (WHERE job.status = 'PUBLISHED')::int AS jobs_published,
       count(DISTINCT job.id) FILTER (WHERE job.status IN ('FAILED', 'RECONCILIATION_REQUIRED'))::int AS jobs_failed
     FROM campaigns campaign

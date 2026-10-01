@@ -18,10 +18,12 @@ type AccountRow = {
   last_published_at: Date | null;
   last_error_at: Date | null;
   last_error_message: string | null;
+  group_ids: string[];
 };
+type GroupRow = { id: string; name: string };
 
 type PageProps = {
-  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[] }>;
+  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[] }>;
 };
 
 function first(value?: string | string[]) {
@@ -30,33 +32,42 @@ function first(value?: string | string[]) {
 
 export default async function AccountsPage({ searchParams }: PageProps) {
   const params = await searchParams;
-  const accounts = await getSqlClient()<AccountRow[]>`
-    SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.account_type, account.status,
-      account.token_expires_at,
-      account.last_error_at, account.last_error_message,
-      account.publishing_limit_usage, account.publishing_limit_total,
-      coalesce(array_agg(DISTINCT group_row.name ORDER BY group_row.name)
-        FILTER (WHERE group_row.name IS NOT NULL), '{}') AS group_names,
-      count(DISTINCT job.id) FILTER (WHERE job.status = 'PUBLISHED')::int AS published_count,
-      max(job.published_at) FILTER (WHERE job.status = 'PUBLISHED') AS last_published_at
-    FROM instagram_accounts account
-    LEFT JOIN account_group_members member ON member.instagram_account_id = account.id
-    LEFT JOIN account_groups group_row ON group_row.id = member.group_id
-    LEFT JOIN publication_jobs job ON job.instagram_account_id = account.id
-    GROUP BY account.id
-    ORDER BY
-      CASE account.status
-        WHEN 'REAUTH_REQUIRED' THEN 0 WHEN 'ERROR' THEN 1 WHEN 'TOKEN_EXPIRING' THEN 2
-        WHEN 'CONNECTED' THEN 3 ELSE 4
-      END,
-      account.username
-  `;
+  const sql = getSqlClient();
+  const [accounts, groups] = await Promise.all([
+    sql<AccountRow[]>`
+      SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.account_type, account.status,
+        account.token_expires_at,
+        account.last_error_at, account.last_error_message,
+        account.publishing_limit_usage, account.publishing_limit_total,
+        coalesce(array_agg(DISTINCT group_row.name ORDER BY group_row.name)
+          FILTER (WHERE group_row.name IS NOT NULL), '{}') AS group_names,
+        coalesce(array_agg(DISTINCT group_row.id::text)
+          FILTER (WHERE group_row.id IS NOT NULL), '{}') AS group_ids,
+        count(DISTINCT job.id) FILTER (WHERE job.status = 'PUBLISHED')::int AS published_count,
+        max(job.published_at) FILTER (WHERE job.status = 'PUBLISHED') AS last_published_at
+      FROM instagram_accounts account
+      LEFT JOIN account_group_members member ON member.instagram_account_id = account.id
+      LEFT JOIN account_groups group_row ON group_row.id = member.group_id
+      LEFT JOIN publication_jobs job ON job.instagram_account_id = account.id
+      GROUP BY account.id
+      ORDER BY
+        CASE account.status
+          WHEN 'REAUTH_REQUIRED' THEN 0 WHEN 'ERROR' THEN 1 WHEN 'TOKEN_EXPIRING' THEN 2
+          WHEN 'CONNECTED' THEN 3 ELSE 4
+        END,
+        account.username
+    `,
+    sql<GroupRow[]>`SELECT id, name FROM account_groups ORDER BY name`,
+  ]);
   const fakeMode = process.env.INSTAGRAM_PROVIDER === "fake"
     && (process.env.NODE_ENV !== "production" || process.env.ALLOW_FAKE_PROVIDER_IN_PRODUCTION === "true");
   const connected = accounts.filter((account) => ["CONNECTED", "TOKEN_EXPIRING"].includes(account.status)).length;
   const needsAttention = accounts.filter((account) => ["REAUTH_REQUIRED", "ERROR"].includes(account.status)).length;
   const selectedFilter = first(params.filtro) ?? "todas";
+  const requestedNiche = first(params.nicho);
+  const selectedNiche = groups.some((group) => group.id === requestedNiche) ? requestedNiche : undefined;
   const filteredAccounts = accounts.filter((account) => {
+    if (selectedNiche && !account.group_ids.includes(selectedNiche)) return false;
     if (selectedFilter === "conectadas") return account.status === "CONNECTED";
     if (selectedFilter === "problema") return ["ERROR", "DISABLED"].includes(account.status);
     if (selectedFilter === "expirando") return account.status === "TOKEN_EXPIRING";
@@ -79,6 +90,18 @@ export default async function AccountsPage({ searchParams }: PageProps) {
       />
       <MessageBanner error={first(params.erro)} success={first(params.ok)} />
 
+      <form className="analytics-filters" method="get" action="/contas">
+        {selectedFilter !== "todas" ? <input type="hidden" name="filtro" value={selectedFilter} /> : null}
+        <label>
+          Nicho / grupo
+          <select name="nicho" defaultValue={selectedNiche ?? ""}>
+            <option value="">Todos os nichos</option>
+            {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+          </select>
+        </label>
+        <button className="button button-secondary" type="submit">Aplicar nicho</button>
+      </form>
+
       <nav className="page-actions" aria-label="Filtrar contas">
         {[
           ["todas", "Todas"],
@@ -90,7 +113,10 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         ].map(([value, label]) => (
           <Link
             className={`button button-small ${selectedFilter === value ? "button-primary" : "button-secondary"}`}
-            href={value === "todas" ? "/contas" : `/contas?filtro=${value}`}
+            href={`/contas?${new URLSearchParams({
+              ...(value === "todas" ? {} : { filtro: value }),
+              ...(selectedNiche ? { nicho: selectedNiche } : {}),
+            }).toString()}`.replace(/\?$/, "")}
             key={value}
           >
             {label}
@@ -121,7 +147,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                   <th scope="col">Conta</th>
                   <th scope="col">Status</th>
                   <th scope="col">Limite de publicação</th>
-                  <th scope="col">Grupos</th>
+                  <th scope="col">Nichos / grupos</th>
                   <th scope="col">Publicações</th>
                   <th scope="col" className="table-action-column">Ação</th>
                 </tr>
@@ -167,7 +193,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                           </div>
                         ) : <span className="muted">Não consultado</span>}
                       </td>
-                      <td data-label="Grupos">
+                      <td data-label="Nichos / grupos">
                         {account.group_names.length ? (
                           <span className="mini-tag-list" title={account.group_names.join(", ")}>
                             {account.group_names.slice(0, 2).map((name) => <span key={name}>{name}</span>)}

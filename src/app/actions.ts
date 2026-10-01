@@ -8,7 +8,13 @@ import { getSqlClient } from "@/db/client";
 import { authenticate, clearSession, clientAddressFromHeaders, requireAdmin, setSession } from "@/server/auth";
 import { banAccount, createFakeAccounts, disconnectAccount, requestInsightsRefresh, unbanAccount, verifyAccount } from "@/server/accounts";
 import { createCampaign, createGroup, deleteGroup, replaceGroupMembers, resolveTargetIds, updateGroup } from "@/server/campaigns";
-import { deleteMedia } from "@/server/media";
+import {
+  createMediaFolder,
+  deleteMedia,
+  deleteMediaFolder,
+  moveMedia,
+  renameMediaFolder,
+} from "@/server/media";
 import {
   cancelCampaign,
   cancelPendingJob,
@@ -198,6 +204,51 @@ export async function deleteMediaAction(formData: FormData) {
   }
 }
 
+export async function createMediaFolderAction(formData: FormData) {
+  const user = await requireAdmin();
+  try {
+    await createMediaFolder(z.string().trim().min(1).max(120).parse(formData.get("name")), user.id);
+    revalidatePath("/midias");
+  } catch (error) {
+    back("/midias", error);
+  }
+}
+
+export async function renameMediaFolderAction(formData: FormData) {
+  const user = await requireAdmin();
+  try {
+    await renameMediaFolder(
+      id.parse(formData.get("folderId")),
+      z.string().trim().min(1).max(120).parse(formData.get("name")),
+      user.id,
+    );
+    revalidatePath("/midias");
+  } catch (error) {
+    back("/midias", error);
+  }
+}
+
+export async function deleteMediaFolderAction(formData: FormData) {
+  const user = await requireAdmin();
+  try {
+    await deleteMediaFolder(id.parse(formData.get("folderId")), user.id);
+    revalidatePath("/midias");
+  } catch (error) {
+    back("/midias", error);
+  }
+}
+
+export async function moveMediaAction(formData: FormData) {
+  const user = await requireAdmin();
+  try {
+    const folderValue = String(formData.get("folderId") ?? "");
+    await moveMedia(id.parse(formData.get("mediaId")), folderValue ? id.parse(folderValue) : null, user.id);
+    revalidatePath("/midias");
+  } catch (error) {
+    back("/midias", error);
+  }
+}
+
 export async function createCampaignAction(formData: FormData) {
   const user = await requireAdmin();
   try {
@@ -238,11 +289,11 @@ export async function scheduleCampaignAction(formData: FormData) {
     const mode = z.enum(["FIXED", "RANDOM"]).parse(formData.get("delayMode"));
     const delay =
       mode === "FIXED"
-        ? { mode, fixedSeconds: z.coerce.number().int().min(0).max(86400).parse(formData.get("delayFixedSeconds")) }
+        ? { mode, fixedSeconds: Math.round(z.coerce.number().min(0).max(1440).parse(formData.get("delayFixedMinutes")) * 60) }
         : {
             mode,
-            minSeconds: z.coerce.number().int().min(0).max(86400).parse(formData.get("delayMinSeconds")),
-            maxSeconds: z.coerce.number().int().min(0).max(86400).parse(formData.get("delayMaxSeconds")),
+            minSeconds: z.coerce.number().int().min(25).max(60).parse(formData.get("delayMinMinutes")) * 60,
+            maxSeconds: z.coerce.number().int().min(25).max(60).parse(formData.get("delayMaxMinutes")) * 60,
           };
     if (delay.mode === "RANDOM" && delay.maxSeconds < delay.minSeconds) throw new Error("Intervalo máximo deve ser maior ou igual ao mínimo");
     await previewCampaignSchedule({
@@ -333,19 +384,21 @@ export async function saveSettingsAction(formData: FormData) {
       .object({
         timezone: z.string().min(1).max(80),
         delayMode: z.enum(["FIXED", "RANDOM"]),
-        delayMin: z.coerce.number().int().min(0).max(86400),
-        delayMax: z.coerce.number().int().min(0).max(86400),
+        delayMinMinutes: z.coerce.number().int().min(25).max(60),
+        delayMaxMinutes: z.coerce.number().int().min(25).max(60),
       })
       .parse({
         timezone: formData.get("timezone"),
         delayMode: formData.get("delayMode"),
-        delayMin: formData.get("delayMin"),
-        delayMax: formData.get("delayMax"),
+        delayMinMinutes: formData.get("delayMinMinutes"),
+        delayMaxMinutes: formData.get("delayMaxMinutes"),
       });
-    if (values.delayMax < values.delayMin) throw new Error("Intervalo máximo deve ser maior ou igual ao mínimo");
+    if (values.delayMaxMinutes < values.delayMinMinutes) throw new Error("Intervalo máximo deve ser maior ou igual ao mínimo");
+    const delayMin = values.delayMinMinutes * 60;
+    const delayMax = values.delayMaxMinutes * 60;
     await getSqlClient()`
       INSERT INTO settings (id, default_timezone, default_delay_mode, default_delay_min, default_delay_max)
-      VALUES (true, ${values.timezone}, ${values.delayMode}, ${values.delayMin}, ${values.delayMax})
+      VALUES (true, ${values.timezone}, ${values.delayMode}, ${delayMin}, ${delayMax})
       ON CONFLICT (id) DO UPDATE SET default_timezone = EXCLUDED.default_timezone,
         default_delay_mode = EXCLUDED.default_delay_mode, default_delay_min = EXCLUDED.default_delay_min,
         default_delay_max = EXCLUDED.default_delay_max, updated_at = now()

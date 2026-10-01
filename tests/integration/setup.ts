@@ -24,6 +24,7 @@ async function cleanTestDatabase() {
       instagram_accounts,
       login_attempts,
       media_assets,
+      media_folders,
       oauth_states,
       settings,
       worker_heartbeats,

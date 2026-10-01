@@ -23,8 +23,8 @@ async function uploadJpeg(page: Page, testInfo: TestInfo, filename: string) {
   }).jpeg({ quality: 82, chromaSubsampling: "4:2:0" }).toFile(path);
 
   await page.goto("/midias");
-  await expect(page.getByRole("heading", { name: "Mídias" })).toBeVisible();
-  await page.locator('input[type="file"][name="file"]').setInputFiles(path);
+  await expect(page.getByRole("heading", { name: "Mídias", exact: true })).toBeVisible();
+  await page.locator('input[type="file"]').setInputFiles(path);
   await expect(page.getByRole("button", { name: /Enviar mídia/i })).toBeEnabled();
   await page.getByRole("button", { name: /Enviar mídia/i }).click();
   await expect(page.getByRole("heading", { name: filename })).toBeVisible();
@@ -43,13 +43,9 @@ async function createImageCampaign(page: Page, campaignName: string, mediaFilena
   return new URL(page.url()).pathname;
 }
 
-async function previewAndConfirmNow(page: Page, expectedTargets: number, randomDelay = false) {
+async function previewAndConfirmNow(page: Page, expectedTargets: number) {
   await page.getByLabel(/Todas as contas disponíveis/i).check();
-  await page.getByLabel("Tipo de intervalo").selectOption(randomDelay ? "RANDOM" : "NONE");
-  if (randomDelay) {
-    await page.getByLabel(/Intervalo mínimo/i).fill("0");
-    await page.getByLabel(/Intervalo máximo/i).fill("0");
-  }
+  await page.getByLabel("Tipo de intervalo").selectOption("NONE");
   await page.getByLabel(/Publicar assim que possível/i).check();
   await page.getByRole("button", { name: /Gerar prévia do cronograma/i }).click();
 
@@ -59,7 +55,7 @@ async function previewAndConfirmNow(page: Page, expectedTargets: number, randomD
   await expect(previewRows).toHaveCount(expectedTargets);
   await expect(previewRows.locator('td[data-label="Intervalo"]').first()).toHaveText(/Início/i);
   if (expectedTargets > 1) {
-    await expect(previewRows.locator('td[data-label="Intervalo"]').nth(1)).toHaveText("0 s");
+    await expect(previewRows.locator('td[data-label="Intervalo"]').nth(1)).toHaveText("0 min");
   }
 
   await page.getByRole("button", { name: `Confirmar e agendar ${expectedTargets} publicações` }).click();
@@ -97,7 +93,7 @@ test("publica 50/50 destinos pelo worker fake real após prévia explícita", as
 
     const campaignUrl = new URL(page.url()).pathname;
     await test.step("usar publicar agora, intervalo zero, revisar 50 destinos e confirmar", async () => {
-      await previewAndConfirmNow(page, 50, true);
+      await previewAndConfirmNow(page, 50);
       const queued = await waitForCampaignJobState(campaignName, (state) => state.total === 50 && state.queued === 50, {
         description: "50 jobs na fila",
       });

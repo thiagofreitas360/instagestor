@@ -1,57 +1,91 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { formatBytes } from "@/components/ui";
 
 const acceptedTypes = new Set(["image/jpeg", "video/mp4", "video/quicktime"]);
+type UploadStatus = "WAITING" | "UPLOADING" | "DONE" | "ERROR";
+type UploadItem = { id: string; file: File; status: UploadStatus; error?: string };
+type Folder = { id: string; name: string };
 
-export function MediaUploadForm({ maxBytes }: { maxBytes: number }) {
+export function MediaUploadForm({ maxBytes, folders }: { maxBytes: number; folders: Folder[] }) {
+  const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
-  const [file, setFile] = useState<File | null>(null);
+  const [items, setItems] = useState<UploadItem[]>([]);
+  const [folderId, setFolderId] = useState("");
   const [dragging, setDragging] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const previewUrl = useMemo(() => file ? URL.createObjectURL(file) : null, [file]);
+  const [uploading, setUploading] = useState(false);
+  const [summary, setSummary] = useState<string | null>(null);
 
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    };
-  }, [previewUrl]);
-
-  function validate(nextFile: File) {
-    if (!acceptedTypes.has(nextFile.type)) return "Use uma imagem JPEG ou um vídeo MP4/MOV.";
-    if (nextFile.size > maxBytes) return `O arquivo excede o limite de ${formatBytes(maxBytes)}.`;
+  function validate(file: File) {
+    if (!acceptedTypes.has(file.type)) return "Use imagem JPEG ou vídeo MP4/MOV.";
+    if (file.size > maxBytes) return `Excede o limite de ${formatBytes(maxBytes)}.`;
     return null;
   }
 
-  function selectFile(nextFile: File | null, fromDrop = false) {
+  function addFiles(files: FileList | File[]) {
     setDragging(false);
-    setError(null);
-    if (!nextFile) {
-      setFile(null);
-      return;
+    setSummary(null);
+    const next = Array.from(files).map((file) => {
+      const error = validate(file);
+      return {
+        id: crypto.randomUUID(),
+        file,
+        status: error ? "ERROR" as const : "WAITING" as const,
+        error: error ?? undefined,
+      };
+    });
+    setItems((current) => [...current, ...next]);
+    if (inputRef.current) inputRef.current.value = "";
+  }
+
+  function update(id: string, values: Partial<UploadItem>) {
+    setItems((current) => current.map((item) => item.id === id ? { ...item, ...values } : item));
+  }
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const pending = items.filter((item) => item.status !== "DONE" && !validate(item.file));
+    if (!pending.length) return;
+    setUploading(true);
+    setSummary(null);
+    let cursor = 0;
+    let succeeded = 0;
+
+    async function worker() {
+      while (cursor < pending.length) {
+        const item = pending[cursor++];
+        update(item.id, { status: "UPLOADING", error: undefined });
+        const data = new FormData();
+        data.set("file", item.file);
+        if (folderId) data.set("folderId", folderId);
+        try {
+          const response = await fetch("/api/media/upload", {
+            method: "POST",
+            body: data,
+            headers: { accept: "application/json" },
+          });
+          const result = await response.json() as { error?: string };
+          if (!response.ok) throw new Error(result.error ?? "Upload não concluído");
+          succeeded++;
+          update(item.id, { status: "DONE", error: undefined });
+        } catch (error) {
+          update(item.id, { status: "ERROR", error: error instanceof Error ? error.message : "Upload não concluído" });
+        }
+      }
     }
-    const validationError = validate(nextFile);
-    if (validationError) {
-      setError(validationError);
-      setFile(null);
-      if (inputRef.current) inputRef.current.value = "";
-      return;
-    }
-    if (fromDrop && inputRef.current) {
-      const transfer = new DataTransfer();
-      transfer.items.add(nextFile);
-      inputRef.current.files = transfer.files;
-    }
-    setFile(nextFile);
+
+    await Promise.all([worker(), worker()]);
+    setUploading(false);
+    setSummary(`${succeeded} de ${pending.length} arquivo(s) enviado(s).`);
+    if (succeeded) router.refresh();
   }
 
   return (
     <form
       className={`upload-form upload-dropzone ${dragging ? "is-dragging" : ""}`}
-      action="/api/media/upload"
-      method="post"
-      encType="multipart/form-data"
+      onSubmit={submit}
       onDragEnter={(event) => {
         event.preventDefault();
         setDragging(true);
@@ -65,38 +99,51 @@ export function MediaUploadForm({ maxBytes }: { maxBytes: number }) {
       }}
       onDrop={(event) => {
         event.preventDefault();
-        selectFile(event.dataTransfer.files.item(0), true);
+        addFiles(event.dataTransfer.files);
       }}
     >
       <div className="upload-mark" aria-hidden="true">↑</div>
       <div className="upload-copy">
-        <h2>{dragging ? "Solte o arquivo aqui" : "Enviar nova mídia"}</h2>
-        <p>Arraste uma imagem ou vídeo, ou escolha um arquivo no dispositivo.</p>
-        {file ? <strong className="upload-file-name">{file.name} · {formatBytes(file.size)}</strong> : null}
-        {error ? <span className="inline-error" role="alert">{error}</span> : null}
+        <h2>{dragging ? "Solte os arquivos aqui" : "Enviar novas mídias"}</h2>
+        <p>Arraste imagens e vídeos ou selecione vários arquivos no dispositivo.</p>
+        {summary ? <strong className="upload-file-name" role="status">{summary}</strong> : null}
       </div>
-      {previewUrl ? (
-        <div className="upload-preview">
-          {file?.type.startsWith("video/") ? (
-            <video src={previewUrl} muted playsInline preload="metadata" aria-label={`Prévia de ${file.name}`} />
-          ) : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={previewUrl} alt={`Prévia de ${file?.name ?? "imagem selecionada"}`} />
-          )}
-        </div>
-      ) : null}
+      <label>
+        Pasta
+        <select aria-label="Pasta" value={folderId} onChange={(event) => setFolderId(event.currentTarget.value)} disabled={uploading}>
+          <option value="">Sem pasta</option>
+          {folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+        </select>
+      </label>
       <label className="file-picker">
-        <span>{file ? "Trocar arquivo" : "Escolher arquivo"}</span>
+        <span>Escolher arquivos</span>
         <input
           ref={inputRef}
-          name="file"
           type="file"
           accept="image/jpeg,video/mp4,video/quicktime"
-          required
-          onChange={(event) => selectFile(event.currentTarget.files?.item(0) ?? null)}
+          multiple
+          disabled={uploading}
+          onChange={(event) => event.currentTarget.files && addFiles(event.currentTarget.files)}
         />
       </label>
-      <button className="button button-secondary" type="submit" disabled={!file || Boolean(error)}>Enviar mídia</button>
+      {items.length ? (
+        <ul className="upload-file-list" aria-live="polite">
+          {items.map((item) => (
+            <li key={item.id}>
+              <span><strong>{item.file.name}</strong><small>{formatBytes(item.file.size)}</small></span>
+              <span className={item.status === "ERROR" ? "inline-error" : "muted"}>
+                {item.status === "WAITING" ? "Aguardando" : item.status === "UPLOADING" ? "Enviando…" : item.status === "DONE" ? "Concluído" : item.error}
+              </span>
+              {!uploading && item.status !== "DONE" ? (
+                <button className="button button-small button-ghost" type="button" onClick={() => setItems((current) => current.filter(({ id }) => id !== item.id))}>Remover</button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <button className="button button-secondary" type="submit" disabled={uploading || !items.some((item) => item.status !== "DONE" && !validate(item.file))}>
+        {uploading ? "Enviando…" : "Enviar mídias"}
+      </button>
     </form>
   );
 }

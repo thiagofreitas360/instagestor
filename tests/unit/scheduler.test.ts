@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildSchedule, localDateTimeToUtc } from "@/server/scheduler";
+import { buildSchedule, expandPublicationTargets, localDateTimeToUtc } from "@/server/scheduler";
 
 describe("buildSchedule", () => {
   it("gera intervalos fixos cumulativos a partir do horário inicial", () => {
@@ -65,5 +65,28 @@ describe("localDateTimeToUtc", () => {
   it("rejeita data ou timezone inválido", () => {
     expect(() => localDateTimeToUtc("não-é-uma-data", "America/Sao_Paulo")).toThrow();
     expect(() => localDateTimeToUtc("2026-09-01T18:00:00", "Timezone/Inexistente")).toThrow();
+  });
+});
+
+describe("expandPublicationTargets", () => {
+  it("expande cada vídeo do lote para todas as contas, preservando a ordem", () => {
+    const accounts = [{ id: "a" }, { id: "b" }];
+
+    expect(expandPublicationTargets(accounts, [0, 1, 2], "REEL")).toEqual([
+      { account: accounts[0], publicationPosition: 0 },
+      { account: accounts[1], publicationPosition: 0 },
+      { account: accounts[0], publicationPosition: 1 },
+      { account: accounts[1], publicationPosition: 1 },
+      { account: accounts[0], publicationPosition: 2 },
+      { account: accounts[1], publicationPosition: 2 },
+    ]);
+  });
+
+  it("mantém uma publicação por conta para carrossel", () => {
+    const accounts = [{ id: "a" }, { id: "b" }];
+    expect(expandPublicationTargets(accounts, [0, 1], "CAROUSEL")).toEqual([
+      { account: accounts[0], publicationPosition: 0 },
+      { account: accounts[1], publicationPosition: 0 },
+    ]);
   });
 });

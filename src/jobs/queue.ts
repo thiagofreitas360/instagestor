@@ -219,6 +219,7 @@ async function loadJob(job: ClaimedJob, workerId: string) {
     JOIN campaigns campaign ON campaign.id = jobs.campaign_id
     JOIN instagram_accounts account ON account.id = jobs.instagram_account_id
     LEFT JOIN campaign_media ON campaign_media.campaign_id = campaign.id
+      AND (campaign.publication_type = 'CAROUSEL' OR campaign_media.position = jobs.publication_position)
     LEFT JOIN media_assets media ON media.id = campaign_media.media_asset_id AND media.processing_status = 'READY'
     WHERE jobs.id = ${job.id} AND jobs.fencing_token = ${job.fencing_token} AND jobs.locked_by = ${workerId}
     GROUP BY jobs.id, campaign.id, account.id
@@ -290,10 +291,11 @@ async function finishCampaign(campaignId: string) {
   `;
 }
 
-async function acquireSlots<T>(accountId: string, run: () => Promise<T>): Promise<T | null> {
+async function acquireSlots<T>(campaignId: string, accountId: string, run: () => Promise<T>): Promise<T | null> {
   const env = getEnv();
   const connection = await getSqlClient().reserve();
   let globalKey: string | undefined;
+  let campaignKey: string | undefined;
   let accountKey: string | undefined;
   try {
     for (let slot = 0; slot < env.META_GLOBAL_CONCURRENCY; slot++) {
@@ -305,6 +307,12 @@ async function acquireSlots<T>(accountId: string, run: () => Promise<T>): Promis
       }
     }
     if (!globalKey) return null;
+    const requestedCampaignKey = `instagestor:meta:campaign:${campaignId}`;
+    const [campaignLock] = await connection<{ acquired: boolean }[]>`
+      SELECT pg_try_advisory_lock(hashtextextended(${requestedCampaignKey}, 0)) AS acquired
+    `;
+    if (!campaignLock.acquired) return null;
+    campaignKey = requestedCampaignKey;
     for (let slot = 0; slot < env.META_ACCOUNT_CONCURRENCY; slot++) {
       const key = `instagestor:meta:account:${accountId}:${slot}`;
       const [row] = await connection<{ acquired: boolean }[]>`SELECT pg_try_advisory_lock(hashtextextended(${key}, 0)) AS acquired`;
@@ -320,9 +328,13 @@ async function acquireSlots<T>(accountId: string, run: () => Promise<T>): Promis
       if (accountKey) await connection`SELECT pg_advisory_unlock(hashtextextended(${accountKey}, 0))`;
     } finally {
       try {
-        if (globalKey) await connection`SELECT pg_advisory_unlock(hashtextextended(${globalKey}, 0))`;
+        if (campaignKey) await connection`SELECT pg_advisory_unlock(hashtextextended(${campaignKey}, 0))`;
       } finally {
-        connection.release();
+        try {
+          if (globalKey) await connection`SELECT pg_advisory_unlock(hashtextextended(${globalKey}, 0))`;
+        } finally {
+          connection.release();
+        }
       }
     }
   }
@@ -338,7 +350,7 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
     const leaseGuard = await startLeaseKeepalive(job, workerId);
     lease = leaseGuard;
     const details = await loadJob(job, workerId);
-    const result = await acquireSlots(details.instagram_account_id, async () => {
+    const result = await acquireSlots(details.campaign_id, details.instagram_account_id, async () => {
       leaseGuard.assertCurrent();
       const [currentState] = await getSqlClient()<Array<{
         account_status: string;
@@ -360,6 +372,38 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
       }
       if (currentState.encrypted_access_token !== details.encrypted_access_token) {
         throw new InstagramError("Token da conta mudou durante o processamento", "TRANSIENT", "ACCOUNT_TOKEN_CHANGED");
+      }
+      const [rhythm] = await getSqlClient()<Array<{
+        delay_mode: string;
+        delay_min_seconds: number | null;
+        last_published_at: Date | null;
+        has_earlier_pending: boolean;
+      }>>`
+        SELECT campaign.delay_mode, campaign.delay_min_seconds,
+          max(previous.published_at) FILTER (WHERE previous.status = 'PUBLISHED') AS last_published_at,
+          EXISTS (
+            SELECT 1 FROM publication_jobs earlier
+            WHERE earlier.campaign_id = current_job.campaign_id AND earlier.id <> current_job.id
+              AND earlier.status NOT IN ('PUBLISHED', 'FAILED', 'CANCELLED', 'RECONCILIATION_REQUIRED')
+              AND (earlier.scheduled_at, earlier.created_at) < (current_job.scheduled_at, current_job.created_at)
+          ) AS has_earlier_pending
+        FROM publication_jobs current_job
+        JOIN campaigns campaign ON campaign.id = current_job.campaign_id
+        LEFT JOIN publication_jobs previous ON previous.campaign_id = campaign.id AND previous.id <> current_job.id
+        WHERE current_job.id = ${job.id}
+        GROUP BY campaign.id, current_job.id
+      `;
+      if (rhythm?.has_earlier_pending) {
+        await releaseForRetry(job, workerId, 1, false);
+        return "sequence_wait" as const;
+      }
+      if (rhythm?.delay_mode === "RANDOM" && (rhythm.delay_min_seconds ?? 0) >= 1500 && rhythm.last_published_at) {
+        const eligibleAt = new Date(rhythm.last_published_at).getTime() + rhythm.delay_min_seconds! * 1000;
+        const remainingSeconds = Math.ceil((eligibleAt - Date.now()) / 1000);
+        if (remainingSeconds > 0) {
+          await releaseForRetry(job, workerId, remainingSeconds, false);
+          return "paced" as const;
+        }
       }
       processingAccountState = {
         encryptedAccessToken: currentState.encrypted_access_token!,

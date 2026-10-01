@@ -48,6 +48,16 @@ function shuffled<T>(values: T[]) {
   return copy;
 }
 
+export function expandPublicationTargets<T extends { id: string }>(
+  targets: T[],
+  mediaPositions: number[],
+  publicationType: string,
+) {
+  const positions = ["FEED_VIDEO", "REEL"].includes(publicationType) ? mediaPositions : [0];
+  if (!positions.length) throw new Error("A campanha precisa de ao menos uma mídia");
+  return positions.flatMap((publicationPosition) => targets.map((account) => ({ account, publicationPosition })));
+}
+
 async function prepareCampaign(input: ScheduleCampaignInput, createJobs: boolean) {
   const uniqueTargets = [...new Set(input.targetIds)];
   if (!uniqueTargets.length) throw new Error("Selecione ao menos uma conta");
@@ -76,7 +86,11 @@ async function prepareCampaign(input: ScheduleCampaignInput, createJobs: boolean
     if (input.targetOrder === "USERNAME") ordered.sort((a, b) => a.username.localeCompare(b.username));
     if (input.targetOrder === "RANDOM") ordered = shuffled(ordered);
 
-    const times = buildSchedule(input.startAt, ordered.length, input.delay);
+    const media = await sql<Array<{ position: number }>>`
+      SELECT position FROM campaign_media WHERE campaign_id = ${input.campaignId} ORDER BY position
+    `;
+    const publications = expandPublicationTargets(ordered, media.map((item) => item.position), campaign.publication_type);
+    const times = buildSchedule(input.startAt, publications.length, input.delay);
     await sql`
       UPDATE campaigns SET
         status = ${createJobs ? "SCHEDULED" : "DRAFT"}::campaign_status,
@@ -89,6 +103,7 @@ async function prepareCampaign(input: ScheduleCampaignInput, createJobs: boolean
       WHERE id = ${input.campaignId}
     `;
     await sql`DELETE FROM campaign_targets WHERE campaign_id = ${input.campaignId}`;
+    await sql`DELETE FROM publication_jobs WHERE campaign_id = ${input.campaignId} AND status = 'DRAFT'`;
     const targetRows = ordered.map((account, position) => ({
       campaign_id: input.campaignId,
       instagram_account_id: account.id,
@@ -96,21 +111,22 @@ async function prepareCampaign(input: ScheduleCampaignInput, createJobs: boolean
       scheduled_at: times[position].toISOString(),
     }));
     await sql`INSERT INTO campaign_targets ${sql(targetRows)}`;
+    const jobRows = publications.map(({ account, publicationPosition }, position) => ({
+      campaign_id: input.campaignId,
+      instagram_account_id: account.id,
+      publication_position: publicationPosition,
+      scheduled_at: times[position].toISOString(),
+      status: createJobs ? "QUEUED" : "DRAFT",
+      max_attempts: getEnv().MAX_PUBLICATION_ATTEMPTS,
+    }));
+    await sql`INSERT INTO publication_jobs ${sql(jobRows)}`;
     if (createJobs) {
-      const jobRows = ordered.map((account, position) => ({
-        campaign_id: input.campaignId,
-        instagram_account_id: account.id,
-        scheduled_at: times[position].toISOString(),
-        status: "QUEUED",
-        max_attempts: getEnv().MAX_PUBLICATION_ATTEMPTS,
-      }));
-      await sql`INSERT INTO publication_jobs ${sql(jobRows)}`;
       await sql`
         INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id, metadata_json)
         VALUES (${input.actorUserId}, 'CAMPAIGN_SCHEDULED', 'campaign', ${input.campaignId}, ${JSON.stringify({ jobs: jobRows.length })}::jsonb)
       `;
     }
-    return { jobs: createJobs ? ordered.length : 0, schedule: times };
+    return { jobs: createJobs ? jobRows.length : 0, schedule: times };
   });
 }
 
@@ -128,12 +144,12 @@ export async function confirmCampaignSchedule(campaignId: string, actorUserId: s
       SELECT id, status, publication_type FROM campaigns WHERE id = ${campaignId} FOR UPDATE
     `;
     if (!campaign || campaign.status !== "DRAFT") throw new Error("Campanha não está pronta para confirmação");
-    const targets = await sql<Array<{ instagram_account_id: string; scheduled_at: Date; account_status: string; account_type: string | null }>>`
-      SELECT target.instagram_account_id, target.scheduled_at, account.status AS account_status, account.account_type
-      FROM campaign_targets target
-      JOIN instagram_accounts account ON account.id = target.instagram_account_id
-      WHERE target.campaign_id = ${campaignId} AND target.scheduled_at IS NOT NULL
-      ORDER BY target.position
+    const targets = await sql<Array<{ instagram_account_id: string; account_status: string; account_type: string | null }>>`
+      SELECT job.instagram_account_id, account.status AS account_status, account.account_type
+      FROM publication_jobs job
+      JOIN instagram_accounts account ON account.id = job.instagram_account_id
+      WHERE job.campaign_id = ${campaignId} AND job.status = 'DRAFT'
+      ORDER BY job.scheduled_at, job.created_at
     `;
     if (!targets.length) throw new Error("Gere o preview do cronograma antes de confirmar");
     if (targets.some((target) => !["CONNECTED", "TOKEN_EXPIRING"].includes(target.account_status))) {
@@ -146,20 +162,13 @@ export async function confirmCampaignSchedule(campaignId: string, actorUserId: s
     ) {
       throw new Error("Uma ou mais contas deixaram de ser Business após o preview");
     }
-    const jobRows = targets.map((target) => ({
-      campaign_id: campaignId,
-      instagram_account_id: target.instagram_account_id,
-      scheduled_at: target.scheduled_at.toISOString(),
-      status: "QUEUED",
-      max_attempts: getEnv().MAX_PUBLICATION_ATTEMPTS,
-    }));
-    await sql`INSERT INTO publication_jobs ${sql(jobRows)}`;
+    await sql`UPDATE publication_jobs SET status = 'QUEUED', updated_at = now() WHERE campaign_id = ${campaignId} AND status = 'DRAFT'`;
     await sql`UPDATE campaigns SET status = 'SCHEDULED', scheduled_at = now(), updated_at = now() WHERE id = ${campaignId}`;
     await sql`
       INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id, metadata_json)
-      VALUES (${actorUserId}, 'CAMPAIGN_SCHEDULED', 'campaign', ${campaignId}, ${JSON.stringify({ jobs: jobRows.length })}::jsonb)
+      VALUES (${actorUserId}, 'CAMPAIGN_SCHEDULED', 'campaign', ${campaignId}, ${JSON.stringify({ jobs: targets.length })}::jsonb)
     `;
-    return { jobs: jobRows.length };
+    return { jobs: targets.length };
   });
 }
 
@@ -184,9 +193,26 @@ export async function resumeCampaign(campaignId: string, actorUserId: string) {
       WHERE id = ${campaignId} AND status = 'PAUSED' RETURNING id
     `;
     if (!campaign) throw new Error("Campanha não está pausada");
+    const [pending] = await sql<Array<{ earliest: Date | null }>>`
+      SELECT min(COALESCE(next_attempt_at, scheduled_at)) AS earliest
+      FROM publication_jobs WHERE campaign_id = ${campaignId} AND status IN ('QUEUED', 'RETRY_WAIT')
+    `;
+    const earliest = pending?.earliest ? new Date(pending.earliest) : null;
+    const shiftSeconds = earliest && earliest.getTime() < Date.now()
+      ? Math.floor((Date.now() - earliest.getTime()) / 1000)
+      : 0;
+    if (shiftSeconds) {
+      await sql`
+        UPDATE publication_jobs SET
+          scheduled_at = scheduled_at + ${shiftSeconds} * interval '1 second',
+          next_attempt_at = CASE WHEN next_attempt_at IS NULL THEN NULL ELSE next_attempt_at + ${shiftSeconds} * interval '1 second' END,
+          updated_at = now()
+        WHERE campaign_id = ${campaignId} AND status IN ('QUEUED', 'RETRY_WAIT')
+      `;
+    }
     await sql`
       INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id, metadata_json)
-      VALUES (${actorUserId}, 'CAMPAIGN_RESUMED', 'campaign', ${campaignId}, ${JSON.stringify({ overdue: "eligible_immediately" })}::jsonb)
+      VALUES (${actorUserId}, 'CAMPAIGN_RESUMED', 'campaign', ${campaignId}, ${JSON.stringify({ overdue: shiftSeconds ? "rebased" : "unchanged", shiftSeconds })}::jsonb)
     `;
   });
 }
@@ -200,7 +226,7 @@ export async function cancelCampaign(campaignId: string, actorUserId: string) {
     if (!campaign) throw new Error("Campanha não pode ser cancelada neste estado");
     await sql`
       UPDATE publication_jobs SET status = 'CANCELLED', finished_at = now(), updated_at = now()
-      WHERE campaign_id = ${campaignId} AND status IN ('QUEUED', 'RETRY_WAIT')
+      WHERE campaign_id = ${campaignId} AND status IN ('DRAFT', 'QUEUED', 'RETRY_WAIT')
     `;
     await sql`
       INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id)
