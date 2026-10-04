@@ -633,3 +633,11 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--brand); 
 .oauth-dialog p { margin: 0 0 10px; font-size: 12px; }
 .oauth-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .oauth-complete { display: grid; min-height: 100vh; place-items: center; padding: 16px; color: var(--text); font-size: 14px; text-align: center; }
+
+.legal-page { max-width: 760px; margin: 0 auto; padding: 48px 16px; color: var(--text); font-size: 14px; line-height: 1.65; }
+.legal-page h1 { margin: 0 0 8px; font-size: 26px; font-weight: 760; }
+.legal-page h2 { margin: 28px 0 8px; font-size: 16px; font-weight: 720; }
+.legal-page p, .legal-page ul, .legal-page ol { margin: 0 0 12px; }
+.legal-page ul, .legal-page ol { padding-left: 22px; list-style: revert; }
+.legal-page a { color: var(--brand); text-decoration: underline; }
+.legal-page code { font-size: 12px; }
