@@ -103,6 +103,9 @@ export const users = pgTable("users", {
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   role: userRole("role").notNull().default("ADMIN"),
+  isPlatformAdmin: boolean("is_platform_admin").notNull().default(false),
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
+  sessionVersion: integer("session_version").notNull().default(0),
   ...timestamps,
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
 });

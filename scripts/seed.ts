@@ -8,9 +8,10 @@ async function main() {
   const password = process.env.ADMIN_PASSWORD;
   if (!email || !password || password.length < 12) throw new Error("ADMIN_EMAIL e ADMIN_PASSWORD (mínimo 12 caracteres) são obrigatórios");
   const [admin] = await getSqlClient()<{ id: string }[]>`
-    INSERT INTO users (email, password_hash, role)
-    VALUES (${email}, ${await hashPassword(password)}, 'ADMIN')
-    ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, updated_at = now()
+    INSERT INTO users (email, password_hash, role, is_platform_admin)
+    VALUES (${email}, ${await hashPassword(password)}, 'ADMIN', true)
+    ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash,
+      is_platform_admin = true, updated_at = now()
     RETURNING id
   `;
   const [organization] = await getSqlClient()<{ id: string }[]>`

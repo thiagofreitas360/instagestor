@@ -43,6 +43,7 @@ export async function loginAction(formData: FormData) {
     .object({ email: z.email(), password: z.string().min(8).max(200) })
     .safeParse({ email: formData.get("email"), password: formData.get("password") });
   if (!parsed.success) back("/login", new Error("E-mail ou senha inválidos"));
+  let mustChangePassword = false;
   try {
     const user = await authenticate(
       parsed.data.email,
@@ -51,11 +52,12 @@ export async function loginAction(formData: FormData) {
     );
     if (!user) back("/login", new Error("E-mail ou senha inválidos"));
     await setSession(user);
+    mustChangePassword = user.mustChangePassword;
   } catch (error) {
     if (error && typeof error === "object" && "digest" in error) throw error;
     back("/login", new Error("Não foi possível autenticar agora. Tente novamente."));
   }
-  redirect("/dashboard");
+  redirect(mustChangePassword ? "/alterar-senha" : "/dashboard");
 }
 
 export async function logoutAction() {

@@ -15,7 +15,7 @@ export const LOGIN_RATE_LIMITS = {
 } as const;
 let dummyPasswordHash: Promise<string> | undefined;
 
-type Session = { userId: string; organizationId: string; role: "ADMIN"; expiresAt: number };
+type Session = { userId: string; organizationId: string; role: "ADMIN"; sessionVersion: number; expiresAt: number };
 export type AdminUser = {
   id: string;
   email: string;
@@ -23,6 +23,9 @@ export type AdminUser = {
   organizationId: string;
   organizationName: string;
   organizationRole: "OWNER" | "ADMIN" | "MEMBER";
+  isPlatformAdmin: boolean;
+  mustChangePassword: boolean;
+  sessionVersion: number;
 };
 
 export async function hashPassword(password: string) {
@@ -44,8 +47,21 @@ function decodeSession(value?: string): Session | null {
   const [payload, signature] = value.split(".");
   if (!payload || !signature || !verifySignature(payload, signature)) return null;
   try {
-    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Session;
-    return session.role === "ADMIN" && session.expiresAt > Date.now() ? session : null;
+    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Partial<Session>;
+    if (
+      session.role !== "ADMIN"
+      || typeof session.userId !== "string"
+      || typeof session.organizationId !== "string"
+      || typeof session.expiresAt !== "number"
+      || session.expiresAt <= Date.now()
+    ) return null;
+    return {
+      userId: session.userId,
+      organizationId: session.organizationId,
+      role: session.role,
+      sessionVersion: Number.isInteger(session.sessionVersion) ? session.sessionVersion! : 0,
+      expiresAt: session.expiresAt,
+    };
   } catch {
     return null;
   }
@@ -57,6 +73,7 @@ export async function setSession(user: AdminUser) {
     userId: user.id,
     organizationId: user.organizationId,
     role: user.role,
+    sessionVersion: user.sessionVersion,
     expiresAt,
   }), {
     httpOnly: true,
@@ -82,12 +99,16 @@ export async function currentUser(): Promise<AdminUser | null> {
   if (!session?.organizationId) return null;
   const [user] = await getSqlClient()<AdminUser[]>`
     SELECT users.id, users.email, users.role,
+      users.is_platform_admin AS "isPlatformAdmin",
+      users.must_change_password AS "mustChangePassword",
+      users.session_version AS "sessionVersion",
       organization.id AS "organizationId", organization.name AS "organizationName",
       membership.role AS "organizationRole"
     FROM users
     JOIN organization_members membership ON membership.user_id = users.id
     JOIN organizations organization ON organization.id = membership.organization_id
     WHERE users.id = ${session.userId} AND users.role = 'ADMIN'
+      AND users.session_version = ${session.sessionVersion}
       AND organization.id = ${session.organizationId} AND organization.status = 'ACTIVE'
     LIMIT 1
   `;
@@ -97,12 +118,22 @@ export async function currentUser(): Promise<AdminUser | null> {
 export async function requireAdmin() {
   const user = await currentUser();
   if (!user) redirect("/login");
+  if (user.mustChangePassword) redirect("/alterar-senha");
   return user;
 }
 
 export async function requireAdminApi() {
   const user = await currentUser();
   if (!user) throw new Response("Não autorizado", { status: 401 });
+  if (user.mustChangePassword) throw new Response("Troca de senha obrigatória", { status: 403 });
+  return user;
+}
+
+export async function requirePlatformAdmin() {
+  const user = await currentUser();
+  if (!user) redirect("/login");
+  if (user.mustChangePassword) redirect("/alterar-senha");
+  if (!user.isPlatformAdmin) redirect("/dashboard");
   return user;
 }
 
@@ -192,6 +223,9 @@ export async function authenticate(email: string, password: string, clientAddres
   if (!admission) return null;
   const [user] = await getSqlClient()<(AdminUser & { password_hash: string })[]>`
     SELECT users.id, users.email, users.role, users.password_hash,
+      users.is_platform_admin AS "isPlatformAdmin",
+      users.must_change_password AS "mustChangePassword",
+      users.session_version AS "sessionVersion",
       organization.id AS "organizationId", organization.name AS "organizationName",
       membership.role AS "organizationRole"
     FROM users
@@ -222,6 +256,9 @@ export async function authenticate(email: string, password: string, clientAddres
     organizationId: user.organizationId,
     organizationName: user.organizationName,
     organizationRole: user.organizationRole,
+    isPlatformAdmin: user.isPlatformAdmin,
+    mustChangePassword: user.mustChangePassword,
+    sessionVersion: user.sessionVersion,
   };
 }
 

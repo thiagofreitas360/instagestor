@@ -127,6 +127,13 @@
       "when": 1791116157799,
       "tag": "0017_wild_pepper_potts",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791119402056,
+      "tag": "0018_luxuriant_punisher",
+      "breakpoints": true
     }
   ]
 }

@@ -14,6 +14,8 @@ const navigation = [
   { href: "/configuracoes", label: "Configurações", mark: "⚙" },
 ] as const;
 
+const platformNavigation = [{ href: "/admin/clientes", label: "Clientes", mark: "S" }] as const;
+
 function Brand() {
   return (
     <Link className="brand" href="/dashboard" aria-label="InstaGestor — ir para o dashboard">
@@ -28,22 +30,41 @@ function Brand() {
   );
 }
 
-function Navigation() {
+function Navigation({ isPlatformAdmin }: { isPlatformAdmin: boolean }) {
   return (
-    <nav aria-label="Navegação principal">
-      <ul className="nav-list">
-        {navigation.map((item) => (
-          <li key={item.href}>
-            <Link className="nav-link" href={item.href}>
-              <span className="nav-mark" aria-hidden="true">
-                {item.mark}
-              </span>
-              {item.label}
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </nav>
+    <>
+      <nav aria-label="Navegação principal">
+        <ul className="nav-list">
+          {navigation.map((item) => (
+            <li key={item.href}>
+              <Link className="nav-link" href={item.href}>
+                <span className="nav-mark" aria-hidden="true">
+                  {item.mark}
+                </span>
+                {item.label}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </nav>
+      {isPlatformAdmin ? (
+        <>
+          <div className="sidebar-section-label sidebar-section-platform">Plataforma</div>
+          <nav aria-label="Administração da plataforma">
+            <ul className="nav-list">
+              {platformNavigation.map((item) => (
+                <li key={item.href}>
+                  <Link className="nav-link" href={item.href}>
+                    <span className="nav-mark" aria-hidden="true">{item.mark}</span>
+                    {item.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        </>
+      ) : null}
+    </>
   );
 }
 
@@ -51,11 +72,13 @@ export function AdminShell({
   email,
   organizationName,
   theme,
+  isPlatformAdmin,
   children,
 }: {
   email: string;
   organizationName: string;
   theme: "LIGHT" | "DARK";
+  isPlatformAdmin: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -67,7 +90,7 @@ export function AdminShell({
       <aside className="sidebar">
         <Brand />
         <div className="sidebar-section-label">Operação</div>
-        <Navigation />
+        <Navigation isPlatformAdmin={isPlatformAdmin} />
         <div className="sidebar-user">
           <span className="avatar" aria-hidden="true">
             {email.slice(0, 1).toUpperCase()}
@@ -89,7 +112,7 @@ export function AdminShell({
         <details className="mobile-menu">
           <summary aria-label="Abrir menu">Menu</summary>
           <div className="mobile-menu-panel">
-            <Navigation />
+            <Navigation isPlatformAdmin={isPlatformAdmin} />
             <form action={logoutAction}>
               <button className="button button-secondary button-block" type="submit">
                 Sair de {email}

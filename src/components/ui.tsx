@@ -32,6 +32,7 @@ const statusLabels: Record<string, string> = {
   OFFLINE: "Offline",
   BANNED: "Banida",
   ACTIVE: "Ativo",
+  SUSPENDED: "Suspenso",
 };
 
 const successStatuses = new Set(["CONNECTED", "READY", "COMPLETED", "PUBLISHED", "ONLINE", "ACTIVE"]);
@@ -57,6 +58,7 @@ const dangerStatuses = new Set([
   "RECONCILIATION_REQUIRED",
   "OFFLINE",
   "BANNED",
+  "SUSPENDED",
 ]);
 
 export function StatusBadge({ status, label }: { status: string; label?: string }) {
