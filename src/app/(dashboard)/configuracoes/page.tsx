@@ -1,25 +1,31 @@
 import { saveSettingsAction } from "@/app/actions";
 import { getSqlClient } from "@/db/client";
 import { DefinitionList, MessageBanner, PageHeader, Panel } from "@/components/ui";
+import { requireAdmin } from "@/server/auth";
 
 type Settings = {
   default_timezone: string;
   default_delay_mode: "FIXED" | "RANDOM";
   default_delay_min: number;
   default_delay_max: number;
+  theme: "LIGHT" | "DARK";
   updated_at: Date;
 };
 type PageProps = { searchParams: Promise<{ erro?: string | string[]; ok?: string | string[] }> };
 function first(value?: string | string[]) { return Array.isArray(value) ? value[0] : value; }
 
 export default async function SettingsPage({ searchParams }: PageProps) {
+  const user = await requireAdmin();
   const query = await searchParams;
-  const [stored] = await getSqlClient()<Settings[]>`SELECT * FROM settings WHERE id = true`;
+  const [stored] = await getSqlClient()<Settings[]>`
+    SELECT * FROM settings WHERE organization_id = ${user.organizationId}
+  `;
   const settings = stored ?? {
     default_timezone: "America/Sao_Paulo",
     default_delay_mode: "RANDOM" as const,
     default_delay_min: 1500,
     default_delay_max: 3600,
+    theme: "LIGHT" as const,
     updated_at: new Date(),
   };
   const provider = process.env.INSTAGRAM_PROVIDER === "meta" ? "Meta Instagram API" : "Provedor simulado";
@@ -47,6 +53,13 @@ export default async function SettingsPage({ searchParams }: PageProps) {
                 <option value="America/Recife">America/Recife</option>
                 <option value="America/Fortaleza">America/Fortaleza</option>
                 <option value="America/Rio_Branco">America/Rio_Branco</option>
+              </select>
+            </label>
+            <label>
+              Aparência
+              <select name="theme" defaultValue={settings.theme}>
+                <option value="LIGHT">Claro</option>
+                <option value="DARK">Escuro</option>
               </select>
             </label>
             <label>

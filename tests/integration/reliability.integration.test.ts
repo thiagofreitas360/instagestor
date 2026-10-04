@@ -8,7 +8,7 @@ import { resetEnvForTests } from "@/lib/env";
 import { getInstagramProvider, resetInstagramProviderForTests } from "@/providers";
 import { verifyAccount } from "@/server/accounts";
 import { cancelCampaign } from "@/server/scheduler";
-import { createAccounts, createCampaign, createJobs, createUser } from "./helpers";
+import { createAccounts, createCampaign, createJobs, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 afterEach(() => {
   process.env.FAKE_PROVIDER_SCENARIO = "success";
@@ -59,6 +59,7 @@ describe("invariantes de confiabilidade", () => {
     await createJobs(campaignId, [account]);
 
     await expect(markAccountUnavailableIfCurrent({
+      organizationId: TEST_ORGANIZATION_ID,
       accountId: account.id,
       expectedEncryptedToken: encryptToken("fake-token:stale:account"),
       expectedStatus: "CONNECTED",
@@ -69,6 +70,7 @@ describe("invariantes de confiabilidade", () => {
     })).resolves.toBe(false);
 
     await expect(markAccountUnavailableIfCurrent({
+      organizationId: TEST_ORGANIZATION_ID,
       accountId: account.id,
       expectedEncryptedToken: originalToken,
       expectedStatus: "CONNECTED",
@@ -122,7 +124,7 @@ describe("invariantes de confiabilidade", () => {
     await createJobs(campaignId, [account]);
     const claim = await claimJob("cancelled-worker");
     expect(claim).not.toBeNull();
-    await cancelCampaign(campaignId, actorId);
+    await cancelCampaign(campaignId, actorId, TEST_ORGANIZATION_ID);
     await sql`UPDATE publication_jobs SET lock_expires_at = now() - interval '1 second' WHERE id = ${claim!.id}`;
 
     await recoverStaleJobs();
@@ -182,7 +184,7 @@ describe("invariantes de confiabilidade", () => {
     };
     provider.getPublishingLimit = async () => ({ usage: 1, total: 100 });
 
-    const verification = verifyAccount(account.id);
+    const verification = verifyAccount(account.id, TEST_ORGANIZATION_ID);
     await profileStarted;
     await sql`
       UPDATE instagram_accounts SET encrypted_access_token = ${reconnectedToken}, username = 'new_connection', status = 'CONNECTED'
@@ -211,7 +213,7 @@ describe("invariantes de confiabilidade", () => {
     const campaignId = await createCampaign(actorId, "SCHEDULED", "Verificação transitória");
     await createJobs(campaignId, [account]);
 
-    await expect(verifyAccount(account.id)).rejects.toMatchObject({ code: "FAKE_500" });
+    await expect(verifyAccount(account.id, TEST_ORGANIZATION_ID)).rejects.toMatchObject({ code: "FAKE_500" });
 
     const [state] = await sql<Array<{ account_status: string; job_status: string; campaign_status: string }>>`
       SELECT account.status AS account_status, job.status AS job_status, campaign.status AS campaign_status

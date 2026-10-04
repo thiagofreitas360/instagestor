@@ -2,6 +2,8 @@ import Link from "next/link";
 import { createFakeAccountsAction, disconnectAccountAction } from "@/app/actions";
 import { getSqlClient } from "@/db/client";
 import { EmptyState, formatDate, MessageBanner, PageHeader, Panel, StatusBadge, initials } from "@/components/ui";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { requireAdmin } from "@/server/auth";
 
 type AccountRow = {
   id: string;
@@ -23,7 +25,7 @@ type AccountRow = {
 type GroupRow = { id: string; name: string };
 
 type PageProps = {
-  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[] }>;
+  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[] }>;
 };
 
 function first(value?: string | string[]) {
@@ -31,6 +33,7 @@ function first(value?: string | string[]) {
 }
 
 export default async function AccountsPage({ searchParams }: PageProps) {
+  const user = await requireAdmin();
   const params = await searchParams;
   const sql = getSqlClient();
   const [accounts, groups] = await Promise.all([
@@ -46,9 +49,11 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         count(DISTINCT job.id) FILTER (WHERE job.status = 'PUBLISHED')::int AS published_count,
         max(job.published_at) FILTER (WHERE job.status = 'PUBLISHED') AS last_published_at
       FROM instagram_accounts account
-      LEFT JOIN account_group_members member ON member.instagram_account_id = account.id
-      LEFT JOIN account_groups group_row ON group_row.id = member.group_id
-      LEFT JOIN publication_jobs job ON job.instagram_account_id = account.id
+      LEFT JOIN account_group_members member ON member.organization_id = account.organization_id
+        AND member.instagram_account_id = account.id
+      LEFT JOIN account_groups group_row ON group_row.organization_id = account.organization_id AND group_row.id = member.group_id
+      LEFT JOIN publication_jobs job ON job.organization_id = account.organization_id AND job.instagram_account_id = account.id
+      WHERE account.organization_id = ${user.organizationId}
       GROUP BY account.id
       ORDER BY
         CASE account.status
@@ -57,7 +62,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         END,
         account.username
     `,
-    sql<GroupRow[]>`SELECT id, name FROM account_groups ORDER BY name`,
+    sql<GroupRow[]>`SELECT id, name FROM account_groups WHERE organization_id = ${user.organizationId} ORDER BY name`,
   ]);
   const fakeMode = process.env.INSTAGRAM_PROVIDER === "fake"
     && (process.env.NODE_ENV !== "production" || process.env.ALLOW_FAKE_PROVIDER_IN_PRODUCTION === "true");
@@ -66,8 +71,12 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const selectedFilter = first(params.filtro) ?? "todas";
   const requestedNiche = first(params.nicho);
   const selectedNiche = groups.some((group) => group.id === requestedNiche) ? requestedNiche : undefined;
+  const search = (first(params.busca) ?? "").trim();
+  const normalizedSearch = search.toLocaleLowerCase("pt-BR").replace(/^@/, "");
   const filteredAccounts = accounts.filter((account) => {
     if (selectedNiche && !account.group_ids.includes(selectedNiche)) return false;
+    if (normalizedSearch && !account.username.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
+      && !account.display_name?.toLocaleLowerCase("pt-BR").includes(normalizedSearch)) return false;
     if (selectedFilter === "conectadas") return account.status === "CONNECTED";
     if (selectedFilter === "problema") return ["ERROR", "DISABLED"].includes(account.status);
     if (selectedFilter === "expirando") return account.status === "TOKEN_EXPIRING";
@@ -93,6 +102,10 @@ export default async function AccountsPage({ searchParams }: PageProps) {
       <form className="analytics-filters" method="get" action="/contas">
         {selectedFilter !== "todas" ? <input type="hidden" name="filtro" value={selectedFilter} /> : null}
         <label>
+          Buscar conta
+          <input name="busca" type="search" defaultValue={search} placeholder="@usuario ou nome" />
+        </label>
+        <label>
           Nicho / grupo
           <select name="nicho" defaultValue={selectedNiche ?? ""}>
             <option value="">Todos os nichos</option>
@@ -116,6 +129,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
             href={`/contas?${new URLSearchParams({
               ...(value === "todas" ? {} : { filtro: value }),
               ...(selectedNiche ? { nicho: selectedNiche } : {}),
+              ...(search ? { busca: search } : {}),
             }).toString()}`.replace(/\?$/, "")}
             key={value}
           >
@@ -212,7 +226,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                           {!(["DISCONNECTED", "DISABLED", "BANNED"].includes(account.status)) ? (
                             <form action={disconnectAccountAction}>
                               <input type="hidden" name="accountId" value={account.id} />
-                              <button className="button button-small button-quiet-danger" type="submit">Desconectar</button>
+                              <ConfirmSubmitButton className="button button-small button-quiet-danger" message={`Desconectar @${account.username}? Publicações pendentes dessa conta serão canceladas.`}>Desconectar</ConfirmSubmitButton>
                             </form>
                           ) : null}
                         </div>

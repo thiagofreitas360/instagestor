@@ -5,13 +5,16 @@ const DAY = 86_400_000;
 
 async function seedAnalyticsAccount() {
   return withE2EDatabase(async (sql) => {
+    const [organization] = await sql<Array<{ id: string }>>`
+      SELECT id FROM organizations WHERE slug = 'instagestor' LIMIT 1
+    `;
     await sql`DELETE FROM account_media`;
     await sql`DELETE FROM account_daily_metrics`;
     await sql`DELETE FROM audit_logs WHERE event_type IN ('ACCOUNT_BANNED', 'ACCOUNT_UNBANNED')`;
     await sql`DELETE FROM instagram_accounts WHERE instagram_user_id LIKE 'e2e_analytics_%'`;
     const [account] = await sql<Array<{ id: string }>>`
-      INSERT INTO instagram_accounts (instagram_user_id, username, status, encrypted_access_token, granted_scopes, insights_synced_at, created_at)
-      VALUES ('e2e_analytics_1', 'e2e_analytics', 'CONNECTED', 'cifrado',
+      INSERT INTO instagram_accounts (organization_id, instagram_user_id, username, status, encrypted_access_token, granted_scopes, insights_synced_at, created_at)
+      VALUES (${organization.id}, 'e2e_analytics_1', 'e2e_analytics', 'CONNECTED', 'cifrado',
         ARRAY['instagram_business_basic', 'instagram_business_content_publish', 'instagram_business_manage_insights'],
         now(), now() - interval '20 days')
       RETURNING id
@@ -20,13 +23,13 @@ async function seedAnalyticsAccount() {
     for (let offset = 0; offset < 5; offset++) {
       const day = new Date(today.getTime() - offset * DAY).toISOString().slice(0, 10);
       await sql`
-        INSERT INTO account_daily_metrics (instagram_account_id, day, followers_count, follower_gains, reach, views, likes)
-        VALUES (${account.id}, ${day}::date, ${1000 - offset * 10}, 12, 300, 900, 40)
+        INSERT INTO account_daily_metrics (organization_id, instagram_account_id, day, followers_count, follower_gains, reach, views, likes)
+        VALUES (${organization.id}, ${account.id}, ${day}::date, ${1000 - offset * 10}, 12, 300, 900, 40)
       `;
     }
     await sql`
-      INSERT INTO account_media (id, instagram_account_id, media_type, product_type, posted_at, views, reach, like_count, caption, permalink)
-      VALUES ('e2e_reel_1', ${account.id}, 'VIDEO', 'REELS', now() - interval '1 day', 4321, 3000, 50, 'Reel de teste', 'https://www.instagram.com/p/e2e/')
+      INSERT INTO account_media (id, organization_id, instagram_account_id, media_type, product_type, posted_at, views, reach, like_count, caption, permalink)
+      VALUES ('e2e_reel_1', ${organization.id}, ${account.id}, 'VIDEO', 'REELS', now() - interval '1 day', 4321, 3000, 50, 'Reel de teste', 'https://www.instagram.com/p/e2e/')
     `;
     return account.id;
   });

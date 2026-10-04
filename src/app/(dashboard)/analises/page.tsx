@@ -8,6 +8,7 @@ import {
   deltaPercent, loadAnalytics, MEDIA_ORDERS, RANKING_ORDERS, resolvePeriod,
   type MediaOrder, type MediaRow, type PeriodDays, type RankingOrder, type Totals,
 } from "@/server/analytics";
+import { requireAdmin } from "@/server/auth";
 
 type Query = Record<string, string | string[] | undefined>;
 type PageProps = { searchParams: Promise<Query> };
@@ -84,6 +85,7 @@ function extraMetric(row: MediaRow) {
 }
 
 export default async function AnalyticsPage({ searchParams }: PageProps) {
+  const user = await requireAdmin();
   const query = await searchParams;
   const periodDays = PERIODS.find((days) => String(days) === first(query.periodo)) ?? 30;
   const accountId = z.uuid().safeParse(first(query.conta)).data;
@@ -104,12 +106,16 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
       FROM instagram_accounts account
       LEFT JOIN LATERAL (
         SELECT followers_count, follows_count, media_count FROM account_daily_metrics
-        WHERE instagram_account_id = account.id AND followers_count IS NOT NULL ORDER BY day DESC LIMIT 1
+        WHERE organization_id = ${user.organizationId}
+          AND instagram_account_id = account.id AND followers_count IS NOT NULL ORDER BY day DESC LIMIT 1
       ) latest ON true
-      WHERE account.status <> 'DISCONNECTED' OR account.insights_synced_at IS NOT NULL
+      WHERE account.organization_id = ${user.organizationId}
+        AND (account.status <> 'DISCONNECTED' OR account.insights_synced_at IS NOT NULL)
       ORDER BY account.username
     `,
-    sql<Array<{ id: string; name: string }>>`SELECT id, name FROM account_groups ORDER BY name`,
+    sql<Array<{ id: string; name: string }>>`
+      SELECT id, name FROM account_groups WHERE organization_id = ${user.organizationId} ORDER BY name
+    `,
   ]);
 
   const selectedAccount = accountId ? accounts.find((account) => account.id === accountId) : undefined;
@@ -121,14 +127,15 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
     title = selectedAccount.display_name ?? `@${selectedAccount.username}`;
   } else if (selectedGroup) {
     const members = await sql<Array<{ instagram_account_id: string }>>`
-      SELECT instagram_account_id FROM account_group_members WHERE group_id = ${selectedGroup.id}
+      SELECT instagram_account_id FROM account_group_members
+      WHERE organization_id = ${user.organizationId} AND group_id = ${selectedGroup.id}
     `;
     accountIds = members.map((member) => member.instagram_account_id);
     title = `Grupo ${selectedGroup.name}`;
   }
 
   const period = resolvePeriod(periodDays);
-  const data = await loadAnalytics({ accountIds, period, mediaType, rankingOrder, mediaOrder });
+  const data = await loadAnalytics({ organizationId: user.organizationId, accountIds, period, mediaType, rankingOrder, mediaOrder });
   const ago = minutesAgo(data.syncedAt);
   const stale = ago !== null && ago > 180;
   const nothingToShow = !data.ranking.length && !data.missingScope.length;

@@ -5,10 +5,27 @@ import { InstagramError, asInstagramError } from "@/lib/errors";
 import { getEnv } from "@/lib/env";
 import { log } from "@/lib/logger";
 import { getInstagramProvider } from "@/providers";
+import { COMMENTS_SCOPE } from "@/providers/instagram";
 import { getStorageProvider } from "@/providers/storage";
+import { scheduleNextLoopJob } from "@/server/automation";
 import { markAccountUnavailableIfCurrent } from "./account-availability";
 
-export type ClaimedJob = { id: string; campaign_id: string; instagram_account_id: string; fencing_token: number };
+export type ClaimedJob = {
+  id: string;
+  organization_id: string;
+  campaign_id: string;
+  loop_id: string | null;
+  instagram_account_id: string;
+  fencing_token: number;
+};
+
+export type ClaimedAutoComment = {
+  id: string;
+  organization_id: string;
+  campaign_id: string;
+  instagram_account_id: string;
+  auto_comment_fencing_token: number;
+};
 
 type JobDetails = ClaimedJob & {
   campaign_id: string;
@@ -60,7 +77,8 @@ export async function renewJobLease(job: ClaimedJob, workerId: string) {
   const lockSeconds = getEnv().JOB_LOCK_SECONDS;
   const rows = await getSqlClient()`
     UPDATE publication_jobs SET lock_expires_at = now() + ${lockSeconds} * interval '1 second', updated_at = now()
-    WHERE id = ${job.id} AND fencing_token = ${job.fencing_token} AND locked_by = ${workerId}
+    WHERE organization_id = ${job.organization_id}
+      AND id = ${job.id} AND fencing_token = ${job.fencing_token} AND locked_by = ${workerId}
       AND lock_expires_at > now()
       AND status IN ('CLAIMED', 'CREATING_CONTAINER', 'WAITING_FOR_CONTAINER', 'READY_TO_PUBLISH', 'PUBLISHING')
     RETURNING id
@@ -116,8 +134,8 @@ export async function claimJob(workerId: string): Promise<ClaimedJob | null> {
     WITH candidate AS (
       SELECT jobs.id
       FROM publication_jobs jobs
-      JOIN campaigns campaign ON campaign.id = jobs.campaign_id
-      JOIN instagram_accounts account ON account.id = jobs.instagram_account_id
+      JOIN campaigns campaign ON campaign.organization_id = jobs.organization_id AND campaign.id = jobs.campaign_id
+      JOIN instagram_accounts account ON account.organization_id = jobs.organization_id AND account.id = jobs.instagram_account_id
       WHERE campaign.status IN ('SCHEDULED', 'RUNNING')
         AND account.status IN ('CONNECTED', 'TOKEN_EXPIRING')
         AND (
@@ -134,19 +152,63 @@ export async function claimJob(workerId: string): Promise<ClaimedJob | null> {
       fencing_token = jobs.fencing_token + 1,
       started_at = COALESCE(jobs.started_at, now()), updated_at = now()
     FROM candidate WHERE jobs.id = candidate.id
-    RETURNING jobs.id, jobs.campaign_id, jobs.instagram_account_id, jobs.fencing_token::int AS fencing_token
+    RETURNING jobs.id, jobs.organization_id, jobs.campaign_id, jobs.instagram_account_id,
+      jobs.loop_id, jobs.fencing_token::int AS fencing_token
   `;
   if (job) {
     await getSqlClient()`
       UPDATE campaigns SET status = 'RUNNING', updated_at = now()
-      WHERE id = (SELECT campaign_id FROM publication_jobs WHERE id = ${job.id}) AND status = 'SCHEDULED'
+      WHERE organization_id = ${job.organization_id}
+        AND id = (SELECT campaign_id FROM publication_jobs WHERE organization_id = ${job.organization_id} AND id = ${job.id})
+        AND status = 'SCHEDULED'
     `;
   }
   return job ?? null;
 }
 
+export async function claimAutoComment(workerId: string): Promise<ClaimedAutoComment | null> {
+  const lockSeconds = Math.max(
+    getEnv().JOB_LOCK_SECONDS,
+    Math.ceil(getEnv().META_HTTP_TIMEOUT_MS / 1000) + 30,
+  );
+  const [job] = await getSqlClient()<ClaimedAutoComment[]>`
+    WITH candidate AS (
+      SELECT jobs.id
+      FROM publication_jobs jobs
+      JOIN instagram_accounts account ON account.organization_id = jobs.organization_id
+        AND account.id = jobs.instagram_account_id
+      WHERE jobs.status = 'PUBLISHED'
+        AND account.status IN ('CONNECTED', 'TOKEN_EXPIRING')
+        AND jobs.auto_comment_text IS NOT NULL
+        AND (
+          (jobs.auto_comment_status = 'QUEUED' AND jobs.auto_comment_scheduled_at <= now()) OR
+          (jobs.auto_comment_status = 'RETRY_WAIT' AND jobs.auto_comment_scheduled_at <= now())
+        )
+      ORDER BY jobs.auto_comment_scheduled_at, jobs.published_at
+      FOR UPDATE OF jobs SKIP LOCKED
+      LIMIT 1
+    )
+    UPDATE publication_jobs jobs SET auto_comment_status = 'PROCESSING',
+      auto_comment_locked_at = now(), auto_comment_locked_by = ${workerId},
+      auto_comment_lock_expires_at = now() + ${lockSeconds} * interval '1 second',
+      auto_comment_fencing_token = jobs.auto_comment_fencing_token + 1, updated_at = now()
+    FROM candidate WHERE jobs.id = candidate.id
+    RETURNING jobs.id, jobs.organization_id, jobs.campaign_id, jobs.instagram_account_id,
+      jobs.auto_comment_fencing_token::int AS auto_comment_fencing_token
+  `;
+  return job ?? null;
+}
+
 export async function recoverStaleJobs() {
   return getSqlClient().begin(async (sql) => {
+    await sql`
+      UPDATE publication_jobs SET auto_comment_status = 'RECONCILIATION_REQUIRED',
+        auto_comment_last_error_code = 'STALE_COMMENT_LOCK', auto_comment_last_error_type = 'AMBIGUOUS',
+        auto_comment_last_error_message = 'Worker perdeu o lock durante o comentário; a operação não será repetida automaticamente',
+        auto_comment_locked_at = NULL, auto_comment_locked_by = NULL, auto_comment_lock_expires_at = NULL,
+        auto_comment_fencing_token = auto_comment_fencing_token + 1, updated_at = now()
+      WHERE auto_comment_status = 'PROCESSING' AND auto_comment_lock_expires_at < now()
+    `;
     const ambiguous = await sql<Array<{ id: string }>>`
       UPDATE publication_jobs SET
         status = 'RECONCILIATION_REQUIRED', reconciliation_required = true,
@@ -170,7 +232,7 @@ export async function recoverStaleJobs() {
           THEN 'Job cancelado após expiração do worker' ELSE 'Lease expirado; job recuperado' END,
         updated_at = now()
       FROM campaigns campaign
-      WHERE campaign.id = job.campaign_id
+      WHERE campaign.organization_id = job.organization_id AND campaign.id = job.campaign_id
         AND job.status IN ('CLAIMED', 'CREATING_CONTAINER', 'WAITING_FOR_CONTAINER', 'READY_TO_PUBLISH')
         AND job.lock_expires_at < now()
       RETURNING job.id
@@ -184,8 +246,8 @@ export async function recoverStaleJobs() {
           count(job.id) FILTER (WHERE job.status = 'CANCELLED') AS cancelled,
           count(job.id) AS total
         FROM campaigns campaign
-        JOIN publication_jobs job ON job.campaign_id = campaign.id
-        WHERE campaign.status IN ('SCHEDULED', 'RUNNING', 'PAUSED')
+        JOIN publication_jobs job ON job.organization_id = campaign.organization_id AND job.campaign_id = campaign.id
+        WHERE campaign.status IN ('SCHEDULED', 'RUNNING', 'PAUSED') AND campaign.origin <> 'LOOP'
         GROUP BY campaign.id
       )
       UPDATE campaigns SET
@@ -206,22 +268,27 @@ export async function recoverStaleJobs() {
 
 async function loadJob(job: ClaimedJob, workerId: string) {
   const [details] = await getSqlClient()<JobDetails[]>`
-    SELECT jobs.*, campaign.publication_type, campaign.caption, campaign.share_to_feed,
+    SELECT jobs.*, COALESCE(jobs.publication_type_override, campaign.publication_type) AS publication_type,
+      campaign.caption, campaign.share_to_feed,
       account.instagram_user_id, account.account_type, account.status AS account_status, account.encrypted_access_token,
       account.publishing_limit_usage, account.publishing_limit_total, account.publishing_limit_checked_at,
       COALESCE(
         json_agg(json_build_object(
           'id', media.id, 'storage_key', media.storage_key, 'storage_provider', media.storage_provider,
           'media_kind', media.media_kind
-        ) ORDER BY campaign_media.position) FILTER (WHERE media.id IS NOT NULL), '[]'
+        ) ORDER BY COALESCE(campaign_media.position, 0)) FILTER (WHERE media.id IS NOT NULL), '[]'
       ) AS media
     FROM publication_jobs jobs
-    JOIN campaigns campaign ON campaign.id = jobs.campaign_id
-    JOIN instagram_accounts account ON account.id = jobs.instagram_account_id
-    LEFT JOIN campaign_media ON campaign_media.campaign_id = campaign.id
+    JOIN campaigns campaign ON campaign.organization_id = jobs.organization_id AND campaign.id = jobs.campaign_id
+    JOIN instagram_accounts account ON account.organization_id = jobs.organization_id AND account.id = jobs.instagram_account_id
+    LEFT JOIN campaign_media ON campaign_media.organization_id = jobs.organization_id AND campaign_media.campaign_id = campaign.id
+      AND jobs.direct_media_asset_id IS NULL
       AND (campaign.publication_type = 'CAROUSEL' OR campaign_media.position = jobs.publication_position)
-    LEFT JOIN media_assets media ON media.id = campaign_media.media_asset_id AND media.processing_status = 'READY'
-    WHERE jobs.id = ${job.id} AND jobs.fencing_token = ${job.fencing_token} AND jobs.locked_by = ${workerId}
+    LEFT JOIN media_assets media ON media.organization_id = jobs.organization_id
+      AND media.id = COALESCE(jobs.direct_media_asset_id, campaign_media.media_asset_id)
+      AND media.processing_status = 'READY' AND media.deleted_at IS NULL
+    WHERE jobs.organization_id = ${job.organization_id}
+      AND jobs.id = ${job.id} AND jobs.fencing_token = ${job.fencing_token} AND jobs.locked_by = ${workerId}
     GROUP BY jobs.id, campaign.id, account.id
   `;
   if (!details) throw new LostLeaseError("Lease do job foi perdido");
@@ -252,7 +319,8 @@ async function fencedUpdate(
 ) {
   const rows = await getSqlClient()`
     UPDATE publication_jobs SET ${fragment}, updated_at = now()
-    WHERE id = ${job.id} AND fencing_token = ${job.fencing_token} AND locked_by = ${workerId}
+    WHERE organization_id = ${job.organization_id}
+      AND id = ${job.id} AND fencing_token = ${job.fencing_token} AND locked_by = ${workerId}
     RETURNING id
   `;
   if (!rows.length) throw new LostLeaseError("Escrita rejeitada pelo fencing token");
@@ -264,20 +332,21 @@ async function releaseForRetry(job: ClaimedJob, workerId: string, seconds: numbe
       status = 'RETRY_WAIT', next_attempt_at = now() + ${seconds} * interval '1 second',
       attempt_count = attempt_count + ${incrementAttempt ? 1 : 0},
       locked_at = NULL, locked_by = NULL, lock_expires_at = NULL, updated_at = now()
-    WHERE id = ${job.id} AND fencing_token = ${job.fencing_token} AND locked_by = ${workerId}
+    WHERE organization_id = ${job.organization_id}
+      AND id = ${job.id} AND fencing_token = ${job.fencing_token} AND locked_by = ${workerId}
     RETURNING id
   `;
   if (!rows.length) throw new LostLeaseError("Escrita rejeitada pelo fencing token");
 }
 
-async function finishCampaign(campaignId: string) {
+async function finishCampaign(organizationId: string, campaignId: string) {
   await getSqlClient()`
     WITH totals AS (
       SELECT
         count(*) FILTER (WHERE status NOT IN ('PUBLISHED', 'FAILED', 'CANCELLED', 'RECONCILIATION_REQUIRED')) AS pending,
         count(*) FILTER (WHERE status = 'PUBLISHED') AS published,
         count(*) FILTER (WHERE status IN ('FAILED', 'RECONCILIATION_REQUIRED')) AS failed
-      FROM publication_jobs WHERE campaign_id = ${campaignId}
+      FROM publication_jobs WHERE organization_id = ${organizationId} AND campaign_id = ${campaignId}
     )
     UPDATE campaigns SET
       status = CASE
@@ -287,7 +356,9 @@ async function finishCampaign(campaignId: string) {
         ELSE 'PARTIALLY_FAILED'::campaign_status
       END,
       updated_at = now()
-    FROM totals WHERE campaigns.id = ${campaignId} AND totals.pending = 0 AND campaigns.status <> 'CANCELLED'
+    FROM totals WHERE campaigns.organization_id = ${organizationId}
+      AND campaigns.id = ${campaignId} AND campaigns.origin <> 'LOOP'
+      AND totals.pending = 0 AND campaigns.status <> 'CANCELLED'
   `;
 }
 
@@ -340,6 +411,135 @@ async function acquireSlots<T>(campaignId: string, accountId: string, run: () =>
   }
 }
 
+async function fencedAutoCommentUpdate(
+  job: ClaimedAutoComment,
+  workerId: string,
+  fragment: ReturnType<ReturnType<typeof getSqlClient>>,
+) {
+  const rows = await getSqlClient()`
+    UPDATE publication_jobs SET ${fragment}, updated_at = now()
+    WHERE organization_id = ${job.organization_id} AND id = ${job.id}
+      AND auto_comment_fencing_token = ${job.auto_comment_fencing_token}
+      AND auto_comment_locked_by = ${workerId} AND auto_comment_status = 'PROCESSING'
+    RETURNING id
+  `;
+  if (!rows.length) throw new LostLeaseError("Lock do comentário foi perdido");
+}
+
+export async function processClaimedAutoComment(job: ClaimedAutoComment, workerId: string) {
+  let attempted = false;
+  let accountState: { encryptedAccessToken: string; status: string } | undefined;
+  try {
+    const [details] = await getSqlClient()<Array<{
+      meta_media_id: string | null;
+      auto_comment_text: string | null;
+      encrypted_access_token: string | null;
+      account_status: string;
+      granted_scopes: string[] | null;
+    }>>`
+      SELECT publication.meta_media_id, publication.auto_comment_text,
+        account.encrypted_access_token, account.status AS account_status, account.granted_scopes
+      FROM publication_jobs publication
+      JOIN instagram_accounts account ON account.organization_id = publication.organization_id
+        AND account.id = publication.instagram_account_id
+      WHERE publication.organization_id = ${job.organization_id} AND publication.id = ${job.id}
+        AND publication.auto_comment_fencing_token = ${job.auto_comment_fencing_token}
+        AND publication.auto_comment_locked_by = ${workerId} AND publication.auto_comment_status = 'PROCESSING'
+    `;
+    if (!details) throw new LostLeaseError("Lock do comentário foi perdido");
+    if (!details.meta_media_id || !details.auto_comment_text) {
+      throw new InstagramError("Publicação sem dados para comentar", "VALIDATION", "COMMENT_DATA_MISSING");
+    }
+    if (!details.encrypted_access_token || !["CONNECTED", "TOKEN_EXPIRING"].includes(details.account_status)) {
+      throw new InstagramError("Conta indisponível para comentar", "AUTH", "ACCOUNT_UNAVAILABLE");
+    }
+    if (getEnv().INSTAGRAM_PROVIDER === "meta" && !details.granted_scopes?.includes(COMMENTS_SCOPE)) {
+      throw new InstagramError("Reconecte a conta para autorizar comentários", "VALIDATION", "COMMENTS_SCOPE_MISSING");
+    }
+    accountState = { encryptedAccessToken: details.encrypted_access_token, status: details.account_status };
+    const result = await acquireSlots(job.campaign_id, job.instagram_account_id, async () => {
+      attempted = true;
+      const commentId = await getInstagramProvider().createComment(
+        details.meta_media_id!,
+        details.auto_comment_text!,
+        decryptToken(details.encrypted_access_token!),
+      );
+      await fencedAutoCommentUpdate(
+        job,
+        workerId,
+        getSqlClient()`auto_comment_status = 'PUBLISHED', meta_comment_id = ${commentId},
+          auto_comment_published_at = now(), auto_comment_last_error_code = NULL,
+          auto_comment_last_error_type = NULL, auto_comment_last_error_message = NULL,
+          auto_comment_last_http_status = NULL, auto_comment_locked_at = NULL,
+          auto_comment_locked_by = NULL, auto_comment_lock_expires_at = NULL`,
+      );
+      return commentId;
+    });
+    if (result === null) {
+      await fencedAutoCommentUpdate(
+        job,
+        workerId,
+        getSqlClient()`auto_comment_status = 'RETRY_WAIT', auto_comment_scheduled_at = now() + interval '1 second',
+          auto_comment_locked_at = NULL, auto_comment_locked_by = NULL, auto_comment_lock_expires_at = NULL`,
+      );
+      return;
+    }
+    log("info", "worker", "auto_comment_published", { job_id: job.id, account_id: job.instagram_account_id });
+  } catch (rawError) {
+    if (rawError instanceof LostLeaseError) {
+      log("warn", "worker", "auto_comment_lock_lost", { job_id: job.id, account_id: job.instagram_account_id });
+      return;
+    }
+    const error = attempted && !(rawError instanceof InstagramError)
+      ? new InstagramError("O comentário pode ter sido publicado, mas não foi confirmado", "AMBIGUOUS", "COMMENT_RESULT_NOT_PERSISTED")
+      : asInstagramError(rawError);
+    const [current] = await getSqlClient()<Array<{ attempt_count: number; max_attempts: number }>>`
+      SELECT auto_comment_attempt_count AS attempt_count, auto_comment_max_attempts AS max_attempts
+      FROM publication_jobs
+      WHERE organization_id = ${job.organization_id} AND id = ${job.id}
+        AND auto_comment_fencing_token = ${job.auto_comment_fencing_token}
+        AND auto_comment_locked_by = ${workerId} AND auto_comment_status = 'PROCESSING'
+    `;
+    if (!current) return;
+    const terminal = error.kind === "AMBIGUOUS" ? "RECONCILIATION_REQUIRED"
+      : ["AUTH", "VALIDATION", "PERMANENT"].includes(error.kind) || current.attempt_count + 1 >= current.max_attempts
+        ? "FAILED"
+        : "RETRY_WAIT";
+    const retrySeconds = terminal === "RETRY_WAIT"
+      ? retryDelaySeconds(current.attempt_count + 1, error.retryAfterSeconds)
+      : 0;
+    await fencedAutoCommentUpdate(
+      job,
+      workerId,
+      getSqlClient()`auto_comment_status = ${terminal}::auto_comment_status,
+        auto_comment_attempt_count = auto_comment_attempt_count + 1,
+        auto_comment_scheduled_at = CASE WHEN ${terminal} = 'RETRY_WAIT'
+          THEN now() + ${retrySeconds} * interval '1 second' ELSE auto_comment_scheduled_at END,
+        auto_comment_last_error_code = ${error.code}, auto_comment_last_error_type = ${error.kind},
+        auto_comment_last_error_message = ${error.message}, auto_comment_last_http_status = ${error.httpStatus ?? null},
+        auto_comment_locked_at = NULL, auto_comment_locked_by = NULL, auto_comment_lock_expires_at = NULL`,
+    );
+    if (error.kind === "AUTH" && accountState) {
+      await markAccountUnavailableIfCurrent({
+        organizationId: job.organization_id,
+        accountId: job.instagram_account_id,
+        expectedEncryptedToken: accountState.encryptedAccessToken,
+        expectedStatus: accountState.status,
+        nextStatus: "REAUTH_REQUIRED",
+        errorCode: error.code,
+        errorKind: error.kind,
+        errorMessage: error.message,
+      });
+    }
+    log("error", "worker", "auto_comment_failed", {
+      job_id: job.id,
+      account_id: job.instagram_account_id,
+      error_code: error.code,
+      error_type: error.kind,
+    });
+  }
+}
+
 export async function processClaimedJob(job: ClaimedJob, workerId: string) {
   const campaignId = job.campaign_id;
   let publishAttempted = false;
@@ -362,8 +562,10 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
         SELECT account.status AS account_status, account.encrypted_access_token,
           account.publishing_limit_usage, account.publishing_limit_total, account.publishing_limit_checked_at
         FROM publication_jobs current_job
-        JOIN instagram_accounts account ON account.id = current_job.instagram_account_id
-        WHERE current_job.id = ${job.id} AND current_job.fencing_token = ${job.fencing_token}
+        JOIN instagram_accounts account ON account.organization_id = current_job.organization_id
+          AND account.id = current_job.instagram_account_id
+        WHERE current_job.organization_id = ${job.organization_id}
+          AND current_job.id = ${job.id} AND current_job.fencing_token = ${job.fencing_token}
           AND current_job.locked_by = ${workerId}
       `;
       if (!currentState) throw new LostLeaseError("Lease do job foi perdido antes da chamada externa");
@@ -383,14 +585,17 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
           max(previous.published_at) FILTER (WHERE previous.status = 'PUBLISHED') AS last_published_at,
           EXISTS (
             SELECT 1 FROM publication_jobs earlier
-            WHERE earlier.campaign_id = current_job.campaign_id AND earlier.id <> current_job.id
+            WHERE earlier.organization_id = current_job.organization_id
+              AND earlier.campaign_id = current_job.campaign_id AND earlier.id <> current_job.id
               AND earlier.status NOT IN ('PUBLISHED', 'FAILED', 'CANCELLED', 'RECONCILIATION_REQUIRED')
               AND (earlier.scheduled_at, earlier.created_at) < (current_job.scheduled_at, current_job.created_at)
           ) AS has_earlier_pending
         FROM publication_jobs current_job
-        JOIN campaigns campaign ON campaign.id = current_job.campaign_id
-        LEFT JOIN publication_jobs previous ON previous.campaign_id = campaign.id AND previous.id <> current_job.id
-        WHERE current_job.id = ${job.id}
+        JOIN campaigns campaign ON campaign.organization_id = current_job.organization_id
+          AND campaign.id = current_job.campaign_id
+        LEFT JOIN publication_jobs previous ON previous.organization_id = current_job.organization_id
+          AND previous.campaign_id = campaign.id AND previous.id <> current_job.id
+        WHERE current_job.organization_id = ${job.organization_id} AND current_job.id = ${job.id}
         GROUP BY campaign.id, current_job.id
       `;
       if (rhythm?.has_earlier_pending) {
@@ -427,7 +632,7 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
         await getSqlClient()`
           UPDATE instagram_accounts SET publishing_limit_usage = ${limit.usage}, publishing_limit_total = ${limit.total},
             publishing_limit_checked_at = now(), updated_at = now()
-          WHERE id = ${details.instagram_account_id}
+          WHERE organization_id = ${job.organization_id} AND id = ${details.instagram_account_id}
             AND encrypted_access_token = ${currentState.encrypted_access_token}
             AND status = ${currentState.account_status}
         `;
@@ -448,6 +653,7 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
           details.media.map((asset) =>
             getStorageProvider(asset.storage_provider).getPublishableUrl({
               id: asset.id,
+              organizationId: job.organization_id,
               storageKey: asset.storage_key,
             }),
           ),
@@ -559,7 +765,13 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
       await fencedUpdate(
         job,
         workerId,
-        getSqlClient()`status = 'PUBLISHED', publishing_phase = 'DONE', meta_media_id = ${mediaId}, published_at = now(), finished_at = now(), last_error_code = NULL, last_error_type = NULL, last_error_message = NULL, last_http_status = NULL, locked_at = NULL, locked_by = NULL, lock_expires_at = NULL, reconciliation_required = false`,
+        getSqlClient()`status = 'PUBLISHED', publishing_phase = 'DONE', meta_media_id = ${mediaId},
+          published_at = now(), finished_at = now(), last_error_code = NULL, last_error_type = NULL,
+          last_error_message = NULL, last_http_status = NULL, locked_at = NULL, locked_by = NULL,
+          lock_expires_at = NULL, reconciliation_required = false,
+          auto_comment_status = CASE WHEN auto_comment_text IS NOT NULL THEN 'QUEUED'::auto_comment_status ELSE NULL END,
+          auto_comment_scheduled_at = CASE WHEN auto_comment_text IS NOT NULL
+            THEN now() + auto_comment_delay_minutes * interval '1 minute' ELSE NULL END`,
       );
       await getSqlClient()`
         UPDATE instagram_accounts SET publishing_limit_usage = LEAST(
@@ -567,7 +779,7 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
             COALESCE(publishing_limit_total, COALESCE(publishing_limit_usage, 0) + 1)
           ), last_successful_api_call_at = now(), last_error_at = NULL,
           last_error_code = NULL, last_error_message = NULL, updated_at = now()
-        WHERE id = ${details.instagram_account_id}
+        WHERE organization_id = ${job.organization_id} AND id = ${details.instagram_account_id}
           AND encrypted_access_token = ${processingAccountState.encryptedAccessToken}
           AND status = ${processingAccountState.status}
       `;
@@ -575,6 +787,23 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
     });
 
     if (result === null) await releaseForRetry(job, workerId, 1, false);
+    if (result === "published" && job.loop_id) {
+      try {
+        await scheduleNextLoopJob({
+          organizationId: job.organization_id,
+          loopId: job.loop_id,
+          accountId: job.instagram_account_id,
+          completedAt: new Date(),
+        });
+      } catch (error) {
+        log("error", "worker", "loop_next_job_failed", {
+          job_id: job.id,
+          loop_id: job.loop_id,
+          account_id: job.instagram_account_id,
+          error: error instanceof Error ? error.message : "unknown",
+        });
+      }
+    }
     log("info", "worker", result ?? "concurrency_wait", { job_id: job.id, campaign_id: campaignId, account_id: job.instagram_account_id });
   } catch (rawError) {
     if (rawError instanceof LostLeaseError) {
@@ -590,7 +819,8 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
       : asInstagramError(rawError);
     const [current] = await getSqlClient()<Array<{ attempt_count: number; max_attempts: number }>>`
       SELECT attempt_count, max_attempts FROM publication_jobs
-      WHERE id = ${job.id} AND fencing_token = ${job.fencing_token} AND locked_by = ${workerId}
+      WHERE organization_id = ${job.organization_id}
+        AND id = ${job.id} AND fencing_token = ${job.fencing_token} AND locked_by = ${workerId}
     `;
     if (!current) return;
 
@@ -623,6 +853,7 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
     }
     if (error.kind === "AUTH" && processingAccountState) {
       await markAccountUnavailableIfCurrent({
+        organizationId: job.organization_id,
         accountId: job.instagram_account_id,
         expectedEncryptedToken: processingAccountState.encryptedAccessToken,
         expectedStatus: processingAccountState.status,
@@ -642,6 +873,6 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
     });
   } finally {
     await lease?.stop();
-    if (campaignId) await finishCampaign(campaignId);
+    if (campaignId) await finishCampaign(job.organization_id, campaignId);
   }
 }

@@ -37,6 +37,7 @@ type ScheduleCampaignInput = {
   delay: ScheduleOptions;
   targetOrder: "SELECTED" | "RANDOM" | "USERNAME";
   actorUserId: string;
+  organizationId: string;
 };
 
 function shuffled<T>(values: T[]) {
@@ -65,13 +66,15 @@ async function prepareCampaign(input: ScheduleCampaignInput, createJobs: boolean
   return getSqlClient().begin(async (sql) => {
     const [campaign] = await sql<
       Array<{ id: string; status: string; delay_mode: "FIXED" | "RANDOM"; publication_type: string }>
-    >`SELECT id, status, delay_mode, publication_type FROM campaigns WHERE id = ${input.campaignId} FOR UPDATE`;
+    >`SELECT id, status, delay_mode, publication_type FROM campaigns
+      WHERE organization_id = ${input.organizationId} AND id = ${input.campaignId} FOR UPDATE`;
     if (!campaign) throw new Error("Campanha não encontrada");
     if (campaign.status !== "DRAFT") throw new Error("Apenas campanhas em rascunho podem ser agendadas");
 
     const accounts = await sql<Array<{ id: string; username: string; account_type: string | null }>>`
       SELECT id, username, account_type FROM instagram_accounts
-      WHERE id = ANY(${uniqueTargets}::uuid[]) AND status IN ('CONNECTED', 'TOKEN_EXPIRING')
+      WHERE organization_id = ${input.organizationId}
+        AND id = ANY(${uniqueTargets}::uuid[]) AND status IN ('CONNECTED', 'TOKEN_EXPIRING')
     `;
     if (accounts.length !== uniqueTargets.length) throw new Error("Uma ou mais contas estão desconectadas ou indisponíveis");
     if (
@@ -87,7 +90,8 @@ async function prepareCampaign(input: ScheduleCampaignInput, createJobs: boolean
     if (input.targetOrder === "RANDOM") ordered = shuffled(ordered);
 
     const media = await sql<Array<{ position: number }>>`
-      SELECT position FROM campaign_media WHERE campaign_id = ${input.campaignId} ORDER BY position
+      SELECT position FROM campaign_media
+      WHERE organization_id = ${input.organizationId} AND campaign_id = ${input.campaignId} ORDER BY position
     `;
     const publications = expandPublicationTargets(ordered, media.map((item) => item.position), campaign.publication_type);
     const times = buildSchedule(input.startAt, publications.length, input.delay);
@@ -100,11 +104,12 @@ async function prepareCampaign(input: ScheduleCampaignInput, createJobs: boolean
         delay_min_seconds = ${input.delay.mode === "RANDOM" ? input.delay.minSeconds : null},
         delay_max_seconds = ${input.delay.mode === "RANDOM" ? input.delay.maxSeconds : null},
         target_order = ${input.targetOrder}, scheduled_at = ${createJobs ? new Date().toISOString() : null}, updated_at = now()
-      WHERE id = ${input.campaignId}
+      WHERE organization_id = ${input.organizationId} AND id = ${input.campaignId}
     `;
-    await sql`DELETE FROM campaign_targets WHERE campaign_id = ${input.campaignId}`;
-    await sql`DELETE FROM publication_jobs WHERE campaign_id = ${input.campaignId} AND status = 'DRAFT'`;
+    await sql`DELETE FROM campaign_targets WHERE organization_id = ${input.organizationId} AND campaign_id = ${input.campaignId}`;
+    await sql`DELETE FROM publication_jobs WHERE organization_id = ${input.organizationId} AND campaign_id = ${input.campaignId} AND status = 'DRAFT'`;
     const targetRows = ordered.map((account, position) => ({
+      organization_id: input.organizationId,
       campaign_id: input.campaignId,
       instagram_account_id: account.id,
       position,
@@ -112,6 +117,7 @@ async function prepareCampaign(input: ScheduleCampaignInput, createJobs: boolean
     }));
     await sql`INSERT INTO campaign_targets ${sql(targetRows)}`;
     const jobRows = publications.map(({ account, publicationPosition }, position) => ({
+      organization_id: input.organizationId,
       campaign_id: input.campaignId,
       instagram_account_id: account.id,
       publication_position: publicationPosition,
@@ -122,8 +128,8 @@ async function prepareCampaign(input: ScheduleCampaignInput, createJobs: boolean
     await sql`INSERT INTO publication_jobs ${sql(jobRows)}`;
     if (createJobs) {
       await sql`
-        INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id, metadata_json)
-        VALUES (${input.actorUserId}, 'CAMPAIGN_SCHEDULED', 'campaign', ${input.campaignId}, ${JSON.stringify({ jobs: jobRows.length })}::jsonb)
+        INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id, metadata_json)
+        VALUES (${input.organizationId}, ${input.actorUserId}, 'CAMPAIGN_SCHEDULED', 'campaign', ${input.campaignId}, ${JSON.stringify({ jobs: jobRows.length })}::jsonb)
       `;
     }
     return { jobs: createJobs ? jobRows.length : 0, schedule: times };
@@ -138,17 +144,19 @@ export function previewCampaignSchedule(input: ScheduleCampaignInput) {
   return prepareCampaign(input, false);
 }
 
-export async function confirmCampaignSchedule(campaignId: string, actorUserId: string) {
+export async function confirmCampaignSchedule(campaignId: string, actorUserId: string, organizationId: string) {
   return getSqlClient().begin(async (sql) => {
     const [campaign] = await sql<{ id: string; status: string; publication_type: string }[]>`
-      SELECT id, status, publication_type FROM campaigns WHERE id = ${campaignId} FOR UPDATE
+      SELECT id, status, publication_type FROM campaigns
+      WHERE organization_id = ${organizationId} AND id = ${campaignId} FOR UPDATE
     `;
     if (!campaign || campaign.status !== "DRAFT") throw new Error("Campanha não está pronta para confirmação");
     const targets = await sql<Array<{ instagram_account_id: string; account_status: string; account_type: string | null }>>`
       SELECT job.instagram_account_id, account.status AS account_status, account.account_type
       FROM publication_jobs job
-      JOIN instagram_accounts account ON account.id = job.instagram_account_id
-      WHERE job.campaign_id = ${campaignId} AND job.status = 'DRAFT'
+      JOIN instagram_accounts account ON account.organization_id = job.organization_id
+        AND account.id = job.instagram_account_id
+      WHERE job.organization_id = ${organizationId} AND job.campaign_id = ${campaignId} AND job.status = 'DRAFT'
       ORDER BY job.scheduled_at, job.created_at
     `;
     if (!targets.length) throw new Error("Gere o preview do cronograma antes de confirmar");
@@ -162,40 +170,42 @@ export async function confirmCampaignSchedule(campaignId: string, actorUserId: s
     ) {
       throw new Error("Uma ou mais contas deixaram de ser Business após o preview");
     }
-    await sql`UPDATE publication_jobs SET status = 'QUEUED', updated_at = now() WHERE campaign_id = ${campaignId} AND status = 'DRAFT'`;
-    await sql`UPDATE campaigns SET status = 'SCHEDULED', scheduled_at = now(), updated_at = now() WHERE id = ${campaignId}`;
+    await sql`UPDATE publication_jobs SET status = 'QUEUED', updated_at = now() WHERE organization_id = ${organizationId} AND campaign_id = ${campaignId} AND status = 'DRAFT'`;
+    await sql`UPDATE campaigns SET status = 'SCHEDULED', scheduled_at = now(), updated_at = now() WHERE organization_id = ${organizationId} AND id = ${campaignId}`;
     await sql`
-      INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id, metadata_json)
-      VALUES (${actorUserId}, 'CAMPAIGN_SCHEDULED', 'campaign', ${campaignId}, ${JSON.stringify({ jobs: targets.length })}::jsonb)
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id, metadata_json)
+      VALUES (${organizationId}, ${actorUserId}, 'CAMPAIGN_SCHEDULED', 'campaign', ${campaignId}, ${JSON.stringify({ jobs: targets.length })}::jsonb)
     `;
     return { jobs: targets.length };
   });
 }
 
-export async function pauseCampaign(campaignId: string, actorUserId: string) {
+export async function pauseCampaign(campaignId: string, actorUserId: string, organizationId: string) {
   await getSqlClient().begin(async (sql) => {
     const [campaign] = await sql<{ id: string }[]>`
       UPDATE campaigns SET status = 'PAUSED', paused_at = now(), updated_at = now()
-      WHERE id = ${campaignId} AND status IN ('SCHEDULED', 'RUNNING') RETURNING id
+      WHERE organization_id = ${organizationId} AND id = ${campaignId}
+        AND status IN ('SCHEDULED', 'RUNNING') RETURNING id
     `;
     if (!campaign) throw new Error("Campanha não pode ser pausada neste estado");
     await sql`
-      INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id)
-      VALUES (${actorUserId}, 'CAMPAIGN_PAUSED', 'campaign', ${campaignId})
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id)
+      VALUES (${organizationId}, ${actorUserId}, 'CAMPAIGN_PAUSED', 'campaign', ${campaignId})
     `;
   });
 }
 
-export async function resumeCampaign(campaignId: string, actorUserId: string) {
+export async function resumeCampaign(campaignId: string, actorUserId: string, organizationId: string) {
   await getSqlClient().begin(async (sql) => {
     const [campaign] = await sql<{ id: string }[]>`
       UPDATE campaigns SET status = 'SCHEDULED', paused_at = NULL, updated_at = now()
-      WHERE id = ${campaignId} AND status = 'PAUSED' RETURNING id
+      WHERE organization_id = ${organizationId} AND id = ${campaignId} AND status = 'PAUSED' RETURNING id
     `;
     if (!campaign) throw new Error("Campanha não está pausada");
     const [pending] = await sql<Array<{ earliest: Date | null }>>`
       SELECT min(COALESCE(next_attempt_at, scheduled_at)) AS earliest
-      FROM publication_jobs WHERE campaign_id = ${campaignId} AND status IN ('QUEUED', 'RETRY_WAIT')
+      FROM publication_jobs WHERE organization_id = ${organizationId}
+        AND campaign_id = ${campaignId} AND status IN ('QUEUED', 'RETRY_WAIT')
     `;
     const earliest = pending?.earliest ? new Date(pending.earliest) : null;
     const shiftSeconds = earliest && earliest.getTime() < Date.now()
@@ -207,35 +217,38 @@ export async function resumeCampaign(campaignId: string, actorUserId: string) {
           scheduled_at = scheduled_at + ${shiftSeconds} * interval '1 second',
           next_attempt_at = CASE WHEN next_attempt_at IS NULL THEN NULL ELSE next_attempt_at + ${shiftSeconds} * interval '1 second' END,
           updated_at = now()
-        WHERE campaign_id = ${campaignId} AND status IN ('QUEUED', 'RETRY_WAIT')
+        WHERE organization_id = ${organizationId}
+          AND campaign_id = ${campaignId} AND status IN ('QUEUED', 'RETRY_WAIT')
       `;
     }
     await sql`
-      INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id, metadata_json)
-      VALUES (${actorUserId}, 'CAMPAIGN_RESUMED', 'campaign', ${campaignId}, ${JSON.stringify({ overdue: shiftSeconds ? "rebased" : "unchanged", shiftSeconds })}::jsonb)
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id, metadata_json)
+      VALUES (${organizationId}, ${actorUserId}, 'CAMPAIGN_RESUMED', 'campaign', ${campaignId}, ${JSON.stringify({ overdue: shiftSeconds ? "rebased" : "unchanged", shiftSeconds })}::jsonb)
     `;
   });
 }
 
-export async function cancelCampaign(campaignId: string, actorUserId: string) {
+export async function cancelCampaign(campaignId: string, actorUserId: string, organizationId: string) {
   return getSqlClient().begin(async (sql) => {
     const [campaign] = await sql<{ id: string }[]>`
       UPDATE campaigns SET status = 'CANCELLED', cancelled_at = now(), updated_at = now()
-      WHERE id = ${campaignId} AND status NOT IN ('COMPLETED', 'CANCELLED') RETURNING id
+      WHERE organization_id = ${organizationId} AND id = ${campaignId}
+        AND status NOT IN ('COMPLETED', 'CANCELLED') RETURNING id
     `;
     if (!campaign) throw new Error("Campanha não pode ser cancelada neste estado");
     await sql`
       UPDATE publication_jobs SET status = 'CANCELLED', finished_at = now(), updated_at = now()
-      WHERE campaign_id = ${campaignId} AND status IN ('DRAFT', 'QUEUED', 'RETRY_WAIT')
+      WHERE organization_id = ${organizationId}
+        AND campaign_id = ${campaignId} AND status IN ('DRAFT', 'QUEUED', 'RETRY_WAIT')
     `;
     await sql`
-      INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id)
-      VALUES (${actorUserId}, 'CAMPAIGN_CANCELLED', 'campaign', ${campaignId})
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id)
+      VALUES (${organizationId}, ${actorUserId}, 'CAMPAIGN_CANCELLED', 'campaign', ${campaignId})
     `;
   });
 }
 
-export async function retryFailedJob(jobId: string, actorUserId: string) {
+export async function retryFailedJob(jobId: string, actorUserId: string, organizationId: string) {
   await getSqlClient().begin(async (sql) => {
     const [job] = await sql<{ id: string; campaign_id: string }[]>`
       UPDATE publication_jobs job SET
@@ -246,27 +259,29 @@ export async function retryFailedJob(jobId: string, actorUserId: string) {
         container_started_at = NULL, publishing_phase = NULL, started_at = NULL, published_at = NULL, finished_at = NULL,
         reconciliation_required = false, updated_at = now()
       FROM campaigns campaign
-      WHERE job.id = ${jobId} AND job.status = 'FAILED' AND campaign.id = job.campaign_id
+      WHERE job.organization_id = ${organizationId} AND job.id = ${jobId}
+        AND job.status = 'FAILED' AND campaign.organization_id = ${organizationId} AND campaign.id = job.campaign_id
         AND campaign.status <> 'CANCELLED'
       RETURNING job.id, job.campaign_id
     `;
     if (!job) throw new Error("Apenas jobs falhados e não ambíguos podem ser reenfileirados");
     await sql`
       UPDATE campaigns SET status = 'SCHEDULED', updated_at = now()
-      WHERE id = ${job.campaign_id} AND status IN ('FAILED', 'PARTIALLY_FAILED')
+      WHERE organization_id = ${organizationId}
+        AND id = ${job.campaign_id} AND status IN ('FAILED', 'PARTIALLY_FAILED')
     `;
     await sql`
-      INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id)
-      VALUES (${actorUserId}, 'JOB_MANUAL_RETRY', 'publication_job', ${jobId})
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id)
+      VALUES (${organizationId}, ${actorUserId}, 'JOB_MANUAL_RETRY', 'publication_job', ${jobId})
     `;
   });
 }
 
-export async function cancelPendingJob(jobId: string, actorUserId: string) {
+export async function cancelPendingJob(jobId: string, actorUserId: string, organizationId: string) {
   await getSqlClient().begin(async (sql) => {
     const [job] = await sql<{ id: string; campaign_id: string }[]>`
       UPDATE publication_jobs SET status = 'CANCELLED', finished_at = now(), updated_at = now()
-      WHERE id = ${jobId} AND status IN ('QUEUED', 'RETRY_WAIT')
+      WHERE organization_id = ${organizationId} AND id = ${jobId} AND status IN ('QUEUED', 'RETRY_WAIT')
       RETURNING id, campaign_id
     `;
     if (!job) throw new Error("Apenas jobs ainda não iniciados podem ser cancelados");
@@ -278,7 +293,7 @@ export async function cancelPendingJob(jobId: string, actorUserId: string) {
           count(*) FILTER (WHERE status IN ('FAILED', 'RECONCILIATION_REQUIRED')) AS failed,
           count(*) FILTER (WHERE status = 'CANCELLED') AS cancelled,
           count(*) AS total
-        FROM publication_jobs WHERE campaign_id = ${job.campaign_id}
+        FROM publication_jobs WHERE organization_id = ${organizationId} AND campaign_id = ${job.campaign_id}
       )
       UPDATE campaigns SET status = CASE
           WHEN totals.pending > 0 THEN campaigns.status
@@ -290,39 +305,42 @@ export async function cancelPendingJob(jobId: string, actorUserId: string) {
         cancelled_at = CASE WHEN totals.cancelled = totals.total THEN now() ELSE campaigns.cancelled_at END,
         updated_at = now()
       FROM totals
-      WHERE campaigns.id = ${job.campaign_id} AND totals.pending = 0 AND campaigns.status <> 'CANCELLED'
+      WHERE campaigns.organization_id = ${organizationId} AND campaigns.id = ${job.campaign_id}
+        AND totals.pending = 0 AND campaigns.status <> 'CANCELLED'
     `;
     await sql`
-      INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id)
-      VALUES (${actorUserId}, 'JOB_CANCELLED', 'publication_job', ${jobId})
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id)
+      VALUES (${organizationId}, ${actorUserId}, 'JOB_CANCELLED', 'publication_job', ${jobId})
     `;
   });
 }
 
-export async function duplicateCampaign(campaignId: string, actorUserId: string) {
+export async function duplicateCampaign(campaignId: string, actorUserId: string, organizationId: string) {
   return getSqlClient().begin(async (sql) => {
     const [copy] = await sql<{ id: string }[]>`
       INSERT INTO campaigns (
-        name, publication_type, caption, status, timezone, delay_mode, delay_fixed_seconds,
+        organization_id, name, publication_type, caption, status, timezone, delay_mode, delay_fixed_seconds,
         delay_min_seconds, delay_max_seconds, target_order, share_to_feed, created_by
       )
-      SELECT name || ' — cópia', publication_type, caption, 'DRAFT', timezone, delay_mode,
+      SELECT organization_id, name || ' — cópia', publication_type, caption, 'DRAFT', timezone, delay_mode,
         delay_fixed_seconds, delay_min_seconds, delay_max_seconds, target_order, share_to_feed, ${actorUserId}
-      FROM campaigns WHERE id = ${campaignId}
+      FROM campaigns WHERE organization_id = ${organizationId} AND id = ${campaignId}
       RETURNING id
     `;
     if (!copy) throw new Error("Campanha não encontrada");
     await sql`
-      INSERT INTO campaign_media (campaign_id, media_asset_id, position)
-      SELECT ${copy.id}, media_asset_id, position FROM campaign_media WHERE campaign_id = ${campaignId}
+      INSERT INTO campaign_media (organization_id, campaign_id, media_asset_id, position)
+      SELECT ${organizationId}, ${copy.id}, media_asset_id, position FROM campaign_media
+      WHERE organization_id = ${organizationId} AND campaign_id = ${campaignId}
     `;
     await sql`
-      INSERT INTO campaign_targets (campaign_id, instagram_account_id, position)
-      SELECT ${copy.id}, instagram_account_id, position FROM campaign_targets WHERE campaign_id = ${campaignId}
+      INSERT INTO campaign_targets (organization_id, campaign_id, instagram_account_id, position)
+      SELECT ${organizationId}, ${copy.id}, instagram_account_id, position FROM campaign_targets
+      WHERE organization_id = ${organizationId} AND campaign_id = ${campaignId}
     `;
     await sql`
-      INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id, metadata_json)
-      VALUES (${actorUserId}, 'CAMPAIGN_CREATED', 'campaign', ${copy.id}, ${JSON.stringify({ duplicatedFrom: campaignId })}::jsonb)
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id, metadata_json)
+      VALUES (${organizationId}, ${actorUserId}, 'CAMPAIGN_CREATED', 'campaign', ${copy.id}, ${JSON.stringify({ duplicatedFrom: campaignId })}::jsonb)
     `;
     return copy.id;
   });

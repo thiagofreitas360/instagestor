@@ -4,6 +4,7 @@ import { getSqlClient } from "@/db/client";
 import { CampaignMediaSelector } from "@/components/campaign-media-selector";
 import { EmptyState, MessageBanner, PageHeader, Panel } from "@/components/ui";
 import { getPrivateMediaUrl } from "@/providers/storage";
+import { requireAdmin } from "@/server/auth";
 
 type MediaRow = {
   id: string;
@@ -17,14 +18,16 @@ type PageProps = { searchParams: Promise<{ erro?: string | string[] }> };
 function first(value?: string | string[]) { return Array.isArray(value) ? value[0] : value; }
 
 export default async function NewCampaignPage({ searchParams }: PageProps) {
+  const user = await requireAdmin();
   const query = await searchParams;
   const metaMode = process.env.INSTAGRAM_PROVIDER === "meta";
   const media = await getSqlClient()<MediaRow[]>`
     SELECT asset.id, asset.original_filename, asset.media_kind, asset.size_bytes,
       asset.folder_id, folder.name AS folder_name
     FROM media_assets asset
-    LEFT JOIN media_folders folder ON folder.id = asset.folder_id
-    WHERE asset.processing_status = 'READY' AND asset.deleted_at IS NULL
+    LEFT JOIN media_folders folder ON folder.organization_id = asset.organization_id AND folder.id = asset.folder_id
+    WHERE asset.organization_id = ${user.organizationId}
+      AND asset.processing_status = 'READY' AND asset.deleted_at IS NULL
     ORDER BY asset.created_at DESC
   `;
   const mediaWithUrls = media.map((asset) => ({
@@ -34,7 +37,7 @@ export default async function NewCampaignPage({ searchParams }: PageProps) {
     size_bytes: asset.size_bytes,
     folder_id: asset.folder_id,
     folder_name: asset.folder_name,
-    previewUrl: getPrivateMediaUrl(asset.id),
+    previewUrl: getPrivateMediaUrl(asset.id, user.organizationId),
   }));
 
   return (

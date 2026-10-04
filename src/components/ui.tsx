@@ -31,9 +31,10 @@ const statusLabels: Record<string, string> = {
   ONLINE: "Online",
   OFFLINE: "Offline",
   BANNED: "Banida",
+  ACTIVE: "Ativo",
 };
 
-const successStatuses = new Set(["CONNECTED", "READY", "COMPLETED", "PUBLISHED", "ONLINE"]);
+const successStatuses = new Set(["CONNECTED", "READY", "COMPLETED", "PUBLISHED", "ONLINE", "ACTIVE"]);
 const warningStatuses = new Set([
   "TOKEN_EXPIRING",
   "UPLOADING",

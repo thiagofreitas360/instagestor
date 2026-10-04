@@ -14,6 +14,9 @@ vi.mock("@/db/client", () => {
     mocks.sqlCalls.push(args);
     return Promise.resolve(mocks.sqlResponses.shift() ?? []);
   };
+  Object.assign(sql, {
+    begin: async (callback: (transaction: typeof sql) => unknown) => callback(sql),
+  });
   return { getSqlClient: () => sql };
 });
 
@@ -44,8 +47,8 @@ beforeEach(() => {
 
 describe("OAuth state", () => {
   it("persiste somente o hash SHA-256 de um nonce forte", async () => {
-    const state = await createOauthState();
-    const persistedHash = mocks.sqlCalls[0][1];
+    const state = await createOauthState("org-1", "user-1");
+    const persistedHash = mocks.sqlCalls[0][3];
 
     expect(state).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(persistedHash).toMatch(/^[a-f0-9]{64}$/);
@@ -53,9 +56,12 @@ describe("OAuth state", () => {
   });
 
   it("consome state uma única vez e rejeita ausente, expirado ou reutilizado", async () => {
-    mocks.sqlResponses.push([{ id: "state-row" }], []);
+    mocks.sqlResponses.push(
+      [{ id: "state-row", organization_id: "org-1", initiated_by: "user-1" }],
+      [],
+    );
 
-    await expect(consumeOauthState("nonce-valido")).resolves.toBeUndefined();
+    await expect(consumeOauthState("nonce-valido")).resolves.toMatchObject({ organization_id: "org-1", initiated_by: "user-1" });
     await expect(consumeOauthState("nonce-valido")).rejects.toThrow("inválido, expirado ou já utilizado");
 
     expect(mocks.sqlCalls[0][1]).toBe(mocks.sqlCalls[1][1]);
@@ -65,7 +71,11 @@ describe("OAuth state", () => {
 
 describe("reconexão OAuth", () => {
   it("faz upsert por instagram_user_id e audita uma reconexão", async () => {
-    mocks.sqlResponses.push([{ id: "state-row" }], [{ id: "account-7", inserted: false }]);
+    mocks.sqlResponses.push(
+      [{ id: "state-row", organization_id: "org-1", initiated_by: "user-1" }],
+      [],
+      [{ id: "account-7", inserted: false }],
+    );
     mocks.exchangeAuthorizationCode.mockResolvedValue({
       appScopedUserId: "app-scoped-7",
       accessToken: "token-meta-secreto",
@@ -82,14 +92,18 @@ describe("reconexão OAuth", () => {
 
     expect(mocks.exchangeAuthorizationCode).toHaveBeenCalledWith("authorization-code");
     expect(mocks.getProfile).toHaveBeenCalledWith("token-meta-secreto");
-    const upsertSql = (mocks.sqlCalls[1][0] as TemplateStringsArray).join(" ");
+    const upsertSql = (mocks.sqlCalls[2][0] as TemplateStringsArray).join(" ");
     expect(upsertSql).toContain("ON CONFLICT (instagram_user_id) DO UPDATE");
-    expect(mocks.sqlCalls[1]).not.toContain("token-meta-secreto");
-    expect(mocks.audit).toHaveBeenCalledWith(null, "ACCOUNT_RECONNECTED", "instagram_account", "account-7");
+    expect(mocks.sqlCalls[2]).not.toContain("token-meta-secreto");
+    expect(mocks.audit).toHaveBeenCalledWith("org-1", "user-1", "ACCOUNT_RECONNECTED", "instagram_account", "account-7");
   });
 
   it("audita conexão inicial quando o upsert insere a conta", async () => {
-    mocks.sqlResponses.push([{ id: "state-row" }], [{ id: "account-new", inserted: true }]);
+    mocks.sqlResponses.push(
+      [{ id: "state-row", organization_id: "org-1", initiated_by: "user-1" }],
+      [],
+      [{ id: "account-new", inserted: true }],
+    );
     mocks.exchangeAuthorizationCode.mockResolvedValue({
       appScopedUserId: "app-new",
       accessToken: "token-new",
@@ -99,6 +113,6 @@ describe("reconexão OAuth", () => {
 
     await connectFromAuthorizationCode("code-new", "state-new");
 
-    expect(mocks.audit).toHaveBeenCalledWith(null, "ACCOUNT_CONNECTED", "instagram_account", "account-new");
+    expect(mocks.audit).toHaveBeenCalledWith("org-1", "user-1", "ACCOUNT_CONNECTED", "instagram_account", "account-new");
   });
 });

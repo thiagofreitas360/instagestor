@@ -60,24 +60,27 @@ type SumsRow = Omit<Totals, "followers" | "netChange" | "lost">;
 type FollowerBound = { instagram_account_id: string; followers: number; net_change: number };
 
 // Por conta: último followers_count até `to` e base (último antes de `from`, senão o primeiro dentro do período).
-function followerBounds(ids: string[] | null, from: string, to: string) {
+function followerBounds(organizationId: string, ids: string[] | null, from: string, to: string) {
   return getSqlClient()<FollowerBound[]>`
     WITH scoped AS (
-      SELECT id FROM instagram_accounts WHERE ${ids}::uuid[] IS NULL OR id = ANY(${ids}::uuid[])
+      SELECT id FROM instagram_accounts
+      WHERE organization_id = ${organizationId} AND (${ids}::uuid[] IS NULL OR id = ANY(${ids}::uuid[]))
     ), last_in AS (
       SELECT DISTINCT ON (m.instagram_account_id) m.instagram_account_id, m.followers_count
       FROM account_daily_metrics m JOIN scoped ON scoped.id = m.instagram_account_id
-      WHERE m.day BETWEEN ${from}::date AND ${to}::date AND m.followers_count IS NOT NULL
+      WHERE m.organization_id = ${organizationId}
+        AND m.day BETWEEN ${from}::date AND ${to}::date AND m.followers_count IS NOT NULL
       ORDER BY m.instagram_account_id, m.day DESC
     ), base AS (
       SELECT DISTINCT ON (instagram_account_id) instagram_account_id, followers_count FROM (
         SELECT m.instagram_account_id, m.followers_count, 0 AS rank, m.day
         FROM account_daily_metrics m JOIN scoped ON scoped.id = m.instagram_account_id
-        WHERE m.day < ${from}::date AND m.followers_count IS NOT NULL
+        WHERE m.organization_id = ${organizationId} AND m.day < ${from}::date AND m.followers_count IS NOT NULL
         UNION ALL
         SELECT m.instagram_account_id, m.followers_count, 1 AS rank, m.day
         FROM account_daily_metrics m JOIN scoped ON scoped.id = m.instagram_account_id
-        WHERE m.day BETWEEN ${from}::date AND ${to}::date AND m.followers_count IS NOT NULL
+        WHERE m.organization_id = ${organizationId}
+          AND m.day BETWEEN ${from}::date AND ${to}::date AND m.followers_count IS NOT NULL
       ) candidates
       ORDER BY instagram_account_id, rank, CASE WHEN rank = 0 THEN day END DESC, day ASC
     )
@@ -87,12 +90,13 @@ function followerBounds(ids: string[] | null, from: string, to: string) {
   `;
 }
 
-async function loadTotals(ids: string[] | null, from: string, to: string): Promise<Totals> {
+async function loadTotals(organizationId: string, ids: string[] | null, from: string, to: string): Promise<Totals> {
   const sql = getSqlClient();
   const [[sums], bounds] = await Promise.all([
     sql<SumsRow[]>`
       WITH scoped AS (
-        SELECT id FROM instagram_accounts WHERE ${ids}::uuid[] IS NULL OR id = ANY(${ids}::uuid[])
+        SELECT id FROM instagram_accounts
+        WHERE organization_id = ${organizationId} AND (${ids}::uuid[] IS NULL OR id = ANY(${ids}::uuid[]))
       ), metrics AS (
         SELECT coalesce(sum(follower_gains), 0)::int AS gains, coalesce(sum(reach), 0)::int AS reach,
           coalesce(sum(views), 0)::int AS views, coalesce(sum(profile_views), 0)::int AS "profileViews",
@@ -101,15 +105,16 @@ async function loadTotals(ids: string[] | null, from: string, to: string): Promi
           coalesce(sum(saves), 0)::int AS saves, coalesce(sum(replies), 0)::int AS replies,
           coalesce(sum(website_clicks), 0)::int AS "websiteClicks", coalesce(sum(profile_links_taps), 0)::int AS "profileLinksTaps"
         FROM account_daily_metrics m JOIN scoped ON scoped.id = m.instagram_account_id
-        WHERE m.day BETWEEN ${from}::date AND ${to}::date
+        WHERE m.organization_id = ${organizationId} AND m.day BETWEEN ${from}::date AND ${to}::date
       ), media AS (
         SELECT count(*)::int AS "mediaCount", count(published_job_id)::int AS "mediaByTool"
         FROM account_media am JOIN scoped ON scoped.id = am.instagram_account_id
-        WHERE am.posted_at >= ${from}::date AND am.posted_at < ${to}::date + 1
+        WHERE am.organization_id = ${organizationId}
+          AND am.posted_at >= ${from}::date AND am.posted_at < ${to}::date + 1
       )
       SELECT metrics.*, media.* FROM metrics, media
     `,
-    followerBounds(ids, from, to),
+    followerBounds(organizationId, ids, from, to),
   ]);
   const followers = bounds.reduce((total, row) => total + row.followers, 0);
   const netChange = bounds.reduce((total, row) => total + row.net_change, 0);
@@ -119,7 +124,7 @@ async function loadTotals(ids: string[] | null, from: string, to: string): Promi
 }
 
 export async function loadAnalytics(input: {
-  accountIds: string[] | null; period: Period; mediaType?: "FEED" | "REELS" | "STORY";
+  organizationId: string; accountIds: string[] | null; period: Period; mediaType?: "FEED" | "REELS" | "STORY";
   rankingOrder?: RankingOrder; mediaOrder?: MediaOrder;
 }): Promise<AnalyticsResult> {
   const sql = getSqlClient();
@@ -129,8 +134,8 @@ export async function loadAnalytics(input: {
   const mediaOrder: MediaOrder = input.mediaOrder ?? "views";
 
   const [totals, previous, series, sums, bounds, media, [state], missingScope, syncErrors] = await Promise.all([
-    loadTotals(ids, from, to),
-    loadTotals(ids, previousFrom, previousTo),
+    loadTotals(input.organizationId, ids, from, to),
+    loadTotals(input.organizationId, ids, previousFrom, previousTo),
     sql<DailyPoint[]>`
       WITH days AS (
         SELECT generate_series(${from}::date, ${to}::date, interval '1 day')::date AS day
@@ -140,6 +145,7 @@ export async function loadAnalytics(input: {
         coalesce(sum(m.reach), 0)::int AS reach, coalesce(sum(m.views), 0)::int AS views
       FROM days
       LEFT JOIN account_daily_metrics m ON m.day = days.day
+        AND m.organization_id = ${input.organizationId}
         AND (${ids}::uuid[] IS NULL OR m.instagram_account_id = ANY(${ids}::uuid[]))
       GROUP BY days.day ORDER BY days.day
     `,
@@ -147,21 +153,26 @@ export async function loadAnalytics(input: {
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.status, account.insights_synced_at,
         coalesce(sum(m.reach), 0)::int AS reach, coalesce(sum(m.views), 0)::int AS views,
         coalesce(sum(m.total_interactions), 0)::int AS total_interactions,
-        (SELECT count(*)::int FROM account_media am WHERE am.instagram_account_id = account.id
+        (SELECT count(*)::int FROM account_media am WHERE am.organization_id = ${input.organizationId}
+          AND am.instagram_account_id = account.id
           AND am.posted_at >= ${from}::date AND am.posted_at < ${to}::date + 1) AS media_count
       FROM instagram_accounts account
-      LEFT JOIN account_daily_metrics m ON m.instagram_account_id = account.id AND m.day BETWEEN ${from}::date AND ${to}::date
-      WHERE (${ids}::uuid[] IS NULL OR account.id = ANY(${ids}::uuid[]))
+      LEFT JOIN account_daily_metrics m ON m.organization_id = account.organization_id
+        AND m.instagram_account_id = account.id AND m.day BETWEEN ${from}::date AND ${to}::date
+      WHERE account.organization_id = ${input.organizationId}
+        AND (${ids}::uuid[] IS NULL OR account.id = ANY(${ids}::uuid[]))
         AND (account.status IN ('CONNECTED', 'TOKEN_EXPIRING') OR m.instagram_account_id IS NOT NULL)
       GROUP BY account.id
     `,
-    followerBounds(ids, from, to),
+    followerBounds(input.organizationId, ids, from, to),
     sql<MediaRow[]>`
       SELECT am.id, am.instagram_account_id AS account_id, account.username, am.media_type, am.product_type, am.permalink,
         am.thumbnail_url, am.caption, am.posted_at, am.like_count, am.comments_count, am.views, am.reach, am.shares, am.saved,
         am.replies, am.follows, am.reels_avg_watch_time_ms, am.story_taps_forward, am.story_taps_back, am.story_exits, am.published_job_id
-      FROM account_media am JOIN instagram_accounts account ON account.id = am.instagram_account_id
-      WHERE (${ids}::uuid[] IS NULL OR am.instagram_account_id = ANY(${ids}::uuid[]))
+      FROM account_media am JOIN instagram_accounts account
+        ON account.organization_id = am.organization_id AND account.id = am.instagram_account_id
+      WHERE am.organization_id = ${input.organizationId}
+        AND (${ids}::uuid[] IS NULL OR am.instagram_account_id = ANY(${ids}::uuid[]))
         AND am.posted_at >= ${from}::date AND am.posted_at < ${to}::date + 1
         AND (${input.mediaType ?? null}::text IS NULL OR am.product_type = ${input.mediaType ?? null}::text)
       ORDER BY ${sql(mediaOrder)} DESC NULLS LAST, am.posted_at DESC
@@ -169,18 +180,21 @@ export async function loadAnalytics(input: {
     `,
     sql<Array<{ synced_at: Date | null }>>`
       SELECT min(insights_synced_at) AS synced_at FROM instagram_accounts
-      WHERE status IN ('CONNECTED', 'TOKEN_EXPIRING') AND ${INSIGHTS_SCOPE} = ANY(granted_scopes)
+      WHERE organization_id = ${input.organizationId}
+        AND status IN ('CONNECTED', 'TOKEN_EXPIRING') AND ${INSIGHTS_SCOPE} = ANY(granted_scopes)
         AND (${ids}::uuid[] IS NULL OR id = ANY(${ids}::uuid[]))
     `,
     sql<Array<{ id: string; username: string }>>`
       SELECT id, username FROM instagram_accounts
-      WHERE status IN ('CONNECTED', 'TOKEN_EXPIRING') AND NOT (${INSIGHTS_SCOPE} = ANY(coalesce(granted_scopes, '{}')))
+      WHERE organization_id = ${input.organizationId}
+        AND status IN ('CONNECTED', 'TOKEN_EXPIRING') AND NOT (${INSIGHTS_SCOPE} = ANY(coalesce(granted_scopes, '{}')))
         AND (${ids}::uuid[] IS NULL OR id = ANY(${ids}::uuid[]))
       ORDER BY username
     `,
     sql<Array<{ id: string; username: string; code: string }>>`
       SELECT id, username, insights_error_code AS code FROM instagram_accounts
-      WHERE status IN ('CONNECTED', 'TOKEN_EXPIRING') AND insights_error_code IS NOT NULL
+      WHERE organization_id = ${input.organizationId}
+        AND status IN ('CONNECTED', 'TOKEN_EXPIRING') AND insights_error_code IS NOT NULL
         AND (${ids}::uuid[] IS NULL OR id = ANY(${ids}::uuid[]))
       ORDER BY username
     `,
@@ -204,7 +218,7 @@ export type BanRecord = {
   last_error_at: string | null; days_alive: number;
 };
 
-export async function loadBanHistory() {
+export async function loadBanHistory(organizationId: string) {
   const records = await getSqlClient()<BanRecord[]>`
     SELECT log.id, account.id AS account_id, account.username, account.display_name, account.status, log.created_at AS banned_at,
       log.metadata_json->>'reason' AS reason,
@@ -214,8 +228,8 @@ export async function loadBanHistory() {
       log.metadata_json->>'lastErrorAt' AS last_error_at,
       floor(extract(epoch FROM (log.created_at - account.created_at)) / 86400)::int AS days_alive
     FROM audit_logs log
-    JOIN instagram_accounts account ON account.id::text = log.entity_id
-    WHERE log.event_type = 'ACCOUNT_BANNED'
+    JOIN instagram_accounts account ON account.organization_id = log.organization_id AND account.id::text = log.entity_id
+    WHERE log.organization_id = ${organizationId} AND log.event_type = 'ACCOUNT_BANNED'
     ORDER BY log.created_at DESC
   `;
   const cutoff = Date.now() - 30 * DAY_MS;

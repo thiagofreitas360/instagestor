@@ -31,9 +31,15 @@ function parseRange(value: string, size: number) {
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const query = new URL(request.url).searchParams;
+  const organizationId = query.get("organization") ?? "";
   const expires = Number(query.get("expires"));
   const signature = query.get("signature") ?? "";
-  if (!Number.isInteger(expires) || expires < Math.floor(Date.now() / 1000) || !verifySignature(`${id}.${expires}`, signature)) {
+  if (
+    !organizationId
+    || !Number.isInteger(expires)
+    || expires < Math.floor(Date.now() / 1000)
+    || !verifySignature(`${organizationId}.${id}.${expires}`, signature)
+  ) {
     return new Response("URL expirada ou inválida", { status: 403 });
   }
   const [asset] = await getSqlClient()<Array<{
@@ -43,7 +49,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     size_bytes: number;
   }>>`
     SELECT storage_key, storage_provider, mime_type, size_bytes FROM media_assets
-    WHERE id = ${id} AND processing_status = 'READY' AND deleted_at IS NULL
+    WHERE organization_id = ${organizationId} AND id = ${id}
+      AND processing_status = 'READY' AND deleted_at IS NULL
   `;
   if (!asset) return new Response("Mídia não encontrada", { status: 404 });
   try {

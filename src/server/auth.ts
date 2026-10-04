@@ -15,8 +15,15 @@ export const LOGIN_RATE_LIMITS = {
 } as const;
 let dummyPasswordHash: Promise<string> | undefined;
 
-type Session = { userId: string; role: "ADMIN"; expiresAt: number };
-export type AdminUser = { id: string; email: string; role: "ADMIN" };
+type Session = { userId: string; organizationId: string; role: "ADMIN"; expiresAt: number };
+export type AdminUser = {
+  id: string;
+  email: string;
+  role: "ADMIN";
+  organizationId: string;
+  organizationName: string;
+  organizationRole: "OWNER" | "ADMIN" | "MEMBER";
+};
 
 export async function hashPassword(password: string) {
   return argon2.hash(password, { type: argon2.argon2id, memoryCost: 19_456, timeCost: 2, parallelism: 1 });
@@ -46,7 +53,12 @@ function decodeSession(value?: string): Session | null {
 
 export async function setSession(user: AdminUser) {
   const expiresAt = Date.now() + SESSION_SECONDS * 1000;
-  (await cookies()).set(SESSION_COOKIE, encodeSession({ userId: user.id, role: user.role, expiresAt }), {
+  (await cookies()).set(SESSION_COOKIE, encodeSession({
+    userId: user.id,
+    organizationId: user.organizationId,
+    role: user.role,
+    expiresAt,
+  }), {
     httpOnly: true,
     secure: getEnv().NODE_ENV === "production",
     sameSite: "lax",
@@ -67,9 +79,17 @@ export async function clearSession() {
 
 export async function currentUser(): Promise<AdminUser | null> {
   const session = decodeSession((await cookies()).get(SESSION_COOKIE)?.value);
-  if (!session) return null;
+  if (!session?.organizationId) return null;
   const [user] = await getSqlClient()<AdminUser[]>`
-    SELECT id, email, role FROM users WHERE id = ${session.userId} AND role = 'ADMIN' LIMIT 1
+    SELECT users.id, users.email, users.role,
+      organization.id AS "organizationId", organization.name AS "organizationName",
+      membership.role AS "organizationRole"
+    FROM users
+    JOIN organization_members membership ON membership.user_id = users.id
+    JOIN organizations organization ON organization.id = membership.organization_id
+    WHERE users.id = ${session.userId} AND users.role = 'ADMIN'
+      AND organization.id = ${session.organizationId} AND organization.status = 'ACTIVE'
+    LIMIT 1
   `;
   return user ?? null;
 }
@@ -171,7 +191,15 @@ export async function authenticate(email: string, password: string, clientAddres
   const admission = await admitLogin(normalizedEmail, normalizedAddress);
   if (!admission) return null;
   const [user] = await getSqlClient()<(AdminUser & { password_hash: string })[]>`
-    SELECT id, email, role, password_hash FROM users WHERE email = ${normalizedEmail} LIMIT 1
+    SELECT users.id, users.email, users.role, users.password_hash,
+      organization.id AS "organizationId", organization.name AS "organizationName",
+      membership.role AS "organizationRole"
+    FROM users
+    JOIN organization_members membership ON membership.user_id = users.id
+    JOIN organizations organization ON organization.id = membership.organization_id
+    WHERE users.email = ${normalizedEmail} AND organization.status = 'ACTIVE'
+    ORDER BY organization.created_at, organization.id
+    LIMIT 1
   `;
 
   const valid = await argon2.verify(user?.password_hash ?? await getDummyPasswordHash(), password);
@@ -187,10 +215,18 @@ export async function authenticate(email: string, password: string, clientAddres
     `;
     await sql`UPDATE users SET last_login_at = now(), updated_at = now() WHERE id = ${user.id}`;
   });
-  return { id: user.id, email: user.email, role: user.role };
+  return {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    organizationId: user.organizationId,
+    organizationName: user.organizationName,
+    organizationRole: user.organizationRole,
+  };
 }
 
 export async function audit(
+  organizationId: string | null,
   actorUserId: string | null,
   eventType: string,
   entityType: string,
@@ -198,7 +234,7 @@ export async function audit(
   metadata: Record<string, unknown> = {},
 ) {
   await getSqlClient()`
-    INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id, metadata_json)
-    VALUES (${actorUserId}, ${eventType}, ${entityType}, ${entityId ?? null}, ${JSON.stringify(metadata)}::jsonb)
+    INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id, metadata_json)
+    VALUES (${organizationId}, ${actorUserId}, ${eventType}, ${entityType}, ${entityId ?? null}, ${JSON.stringify(metadata)}::jsonb)
   `;
 }

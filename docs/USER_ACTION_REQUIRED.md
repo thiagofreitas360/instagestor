@@ -27,7 +27,7 @@ Este arquivo contém somente atividades que exigem acesso humano a contas, infra
 - [ ] Criar ou selecionar o App e adicionar Instagram API with Instagram Login / Business Login for Instagram.
 - [ ] Cadastrar exatamente a redirect URI `https://SEU_DOMINIO/api/instagram/oauth/callback`.
 - [ ] Cadastrar callback de desautorização e endpoint de exclusão de dados conforme [META_SETUP.md](META_SETUP.md).
-- [ ] Solicitar somente `instagram_business_basic` e `instagram_business_content_publish`.
+- [ ] Solicitar `instagram_business_basic`, `instagram_business_content_publish`, `instagram_business_manage_insights` e `instagram_business_manage_comments`.
 - [ ] Copiar App ID e App Secret diretamente para o secret manager de produção.
 - [ ] Criar conta Instagram profissional de teste e conceder acesso necessário ao App.
 - [ ] Quando necessário fora dos papéis do App, concluir Business Verification e solicitar Advanced Access usando [META_APP_REVIEW.md](META_APP_REVIEW.md).

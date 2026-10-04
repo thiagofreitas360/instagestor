@@ -8,7 +8,7 @@ import { getSqlClient } from "@/db/client";
 import { resetEnvForTests } from "@/lib/env";
 import { getStorageProvider, newStorageKey } from "@/providers/storage";
 import { createMediaFolder, deleteMediaFolder, renameMediaFolder } from "@/server/media";
-import { createUser } from "./helpers";
+import { createOrganization, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 let storageRoot: string;
 
@@ -27,20 +27,21 @@ afterEach(async () => {
 describe("download temporário de mídia local", () => {
   it("transmite somente o intervalo solicitado e rejeita Range inválido", async () => {
     const id = randomUUID();
-    const key = newStorageKey();
+    await createOrganization(TEST_ORGANIZATION_ID, "InstaGestor Teste", "instagestor-teste");
+    const key = newStorageKey(TEST_ORGANIZATION_ID);
     const bytes = Buffer.from("0123456789", "utf8");
     const storage = getStorageProvider("LOCAL");
     await storage.put(key, bytes, "image/jpeg");
     await getSqlClient()`
       INSERT INTO media_assets (
-        id, original_filename, storage_provider, storage_key, mime_type, media_kind,
+        id, organization_id, original_filename, storage_provider, storage_key, mime_type, media_kind,
         size_bytes, checksum_sha256, width, height, processing_status
       ) VALUES (
-        ${id}, 'range.jpg', 'LOCAL', ${key}, 'image/jpeg', 'IMAGE', ${bytes.length},
+        ${id}, ${TEST_ORGANIZATION_ID}, 'range.jpg', 'LOCAL', ${key}, 'image/jpeg', 'IMAGE', ${bytes.length},
         ${"b".repeat(64)}, 1, 1, 'READY'
       )
     `;
-    const signedUrl = await storage.getPublishableUrl({ id, storageKey: key });
+    const signedUrl = await storage.getPublishableUrl({ id, organizationId: TEST_ORGANIZATION_ID, storageKey: key });
 
     const partial = await GET(
       new Request(signedUrl, { headers: { range: "bytes=2-5" } }),
@@ -64,19 +65,19 @@ describe("pastas de mídia", () => {
   it("cria, renomeia e exclui a pasta sem excluir suas mídias", async () => {
     const sql = getSqlClient();
     const actorUserId = await createUser("media-folder@example.test");
-    const folderId = await createMediaFolder("Fitness", actorUserId);
+    const folderId = await createMediaFolder("Fitness", actorUserId, TEST_ORGANIZATION_ID);
     const [asset] = await sql<Array<{ id: string }>>`
       INSERT INTO media_assets (
-        original_filename, storage_provider, storage_key, mime_type, media_kind,
+        organization_id, original_filename, storage_provider, storage_key, mime_type, media_kind,
         size_bytes, checksum_sha256, width, height, folder_id, processing_status
       ) VALUES (
-        'fitness.jpg', 'LOCAL', 'folder/fitness.jpg', 'image/jpeg', 'IMAGE',
+        ${TEST_ORGANIZATION_ID}, 'fitness.jpg', 'LOCAL', 'folder/fitness.jpg', 'image/jpeg', 'IMAGE',
         1024, ${"f".repeat(64)}, 1080, 1080, ${folderId}, 'READY'
       ) RETURNING id
     `;
 
-    await renameMediaFolder(folderId, "Fitness Brasil", actorUserId);
-    await deleteMediaFolder(folderId, actorUserId);
+    await renameMediaFolder(folderId, "Fitness Brasil", actorUserId, TEST_ORGANIZATION_ID);
+    await deleteMediaFolder(folderId, actorUserId, TEST_ORGANIZATION_ID);
 
     const [persisted] = await sql<Array<{ folder_id: string | null; deleted_at: Date | null }>>`
       SELECT folder_id, deleted_at FROM media_assets WHERE id = ${asset.id}

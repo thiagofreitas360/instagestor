@@ -8,6 +8,8 @@ const navigation = [
   { href: "/grupos", label: "Grupos", mark: "G" },
   { href: "/midias", label: "Mídias", mark: "M" },
   { href: "/campanhas", label: "Campanhas", mark: "C" },
+  { href: "/loops", label: "Loops", mark: "L" },
+  { href: "/escalas", label: "Escalas", mark: "E" },
   { href: "/fila", label: "Fila", mark: "F" },
   { href: "/configuracoes", label: "Configurações", mark: "⚙" },
 ] as const;
@@ -45,9 +47,19 @@ function Navigation() {
   );
 }
 
-export function AdminShell({ email, children }: { email: string; children: React.ReactNode }) {
+export function AdminShell({
+  email,
+  organizationName,
+  theme,
+  children,
+}: {
+  email: string;
+  organizationName: string;
+  theme: "LIGHT" | "DARK";
+  children: React.ReactNode;
+}) {
   return (
-    <div className="admin-shell">
+    <div className="admin-shell" data-theme={theme}>
       <a className="skip-link" href="#conteudo">
         Pular para o conteúdo
       </a>
@@ -61,7 +73,7 @@ export function AdminShell({ email, children }: { email: string; children: React
             {email.slice(0, 1).toUpperCase()}
           </span>
           <span className="sidebar-user-copy">
-            <strong>Administrador</strong>
+            <strong title={organizationName}>{organizationName}</strong>
             <small title={email}>{email}</small>
           </span>
           <form action={logoutAction}>

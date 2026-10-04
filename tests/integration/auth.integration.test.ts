@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { getSqlClient } from "@/db/client";
 import { authenticate, hashPassword, LOGIN_RATE_LIMITS } from "@/server/auth";
+import { createOrganization, TEST_ORGANIZATION_ID } from "./helpers";
 
 async function createAdmin(email: string, password: string) {
+  await createOrganization(TEST_ORGANIZATION_ID, "InstaGestor Teste", "instagestor-teste");
   const [user] = await getSqlClient()<{ id: string }[]>`
     INSERT INTO users (email, password_hash, role)
     VALUES (${email}, ${await hashPassword(password)}, 'ADMIN')
     RETURNING id
+  `;
+  await getSqlClient()`
+    INSERT INTO organization_members (organization_id, user_id, role)
+    VALUES (${TEST_ORGANIZATION_ID}, ${user.id}, 'OWNER')
   `;
   return user.id;
 }

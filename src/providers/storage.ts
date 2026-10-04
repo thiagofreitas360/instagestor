@@ -8,7 +8,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getEnv } from "@/lib/env";
 import { sign } from "@/lib/crypto";
 
-export type StoredAsset = { id: string; storageKey: string };
+export type StoredAsset = { id: string; organizationId: string; storageKey: string };
 
 export interface StorageProvider {
   readonly name: "LOCAL" | "S3";
@@ -39,7 +39,7 @@ class LocalStorageProvider implements StorageProvider {
   }
 
   async getPublishableUrl(asset: StoredAsset) {
-    return getPrivateMediaUrl(asset.id);
+    return getPrivateMediaUrl(asset.id, asset.organizationId);
   }
 
   async open(key: string, range?: { start: number; end: number }) {
@@ -99,12 +99,12 @@ export function getStorageProvider(name?: "LOCAL" | "S3") {
   return providers.get(selected)!;
 }
 
-export function newStorageKey() {
-  return `media/${randomUUID()}`;
+export function newStorageKey(organizationId: string) {
+  return `organizations/${organizationId}/media/${randomUUID()}`;
 }
 
-export function getPrivateMediaUrl(id: string) {
+export function getPrivateMediaUrl(id: string, organizationId: string) {
   const expires = Math.floor(Date.now() / 1000) + getEnv().PUBLISHABLE_URL_TTL_SECONDS;
-  const signature = sign(`${id}.${expires}`);
-  return `${getEnv().APP_URL}/api/media/${id}/content?expires=${expires}&signature=${signature}`;
+  const signature = sign(`${organizationId}.${id}.${expires}`);
+  return `${getEnv().APP_URL}/api/media/${id}/content?organization=${organizationId}&expires=${expires}&signature=${signature}`;
 }

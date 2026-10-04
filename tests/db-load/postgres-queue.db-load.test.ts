@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getSqlClient } from "@/db/client";
 import { claimJob, processClaimedJob, recoverStaleJobs, type ClaimedJob } from "@/jobs/queue";
 import { encryptToken } from "@/lib/crypto";
-import { createUser } from "../integration/helpers";
+import { createUser, TEST_ORGANIZATION_ID } from "../integration/helpers";
 
 const ACCOUNT_COUNT = 50;
 const CLAIM_BATCH_SIZE = 32;
@@ -38,6 +38,7 @@ async function seedQueue(size: number) {
   const accounts = await sql<Array<{ id: string; instagram_user_id: string }>>`
     INSERT INTO instagram_accounts ${sql(
       Array.from({ length: ACCOUNT_COUNT }, (_, index) => ({
+        organization_id: TEST_ORGANIZATION_ID,
         instagram_user_id: `db-load-${size}-ig-${index.toString().padStart(2, "0")}`,
         username: `db_load_${size}_${index.toString().padStart(2, "0")}`,
         status: "CONNECTED",
@@ -53,6 +54,7 @@ async function seedQueue(size: number) {
   const campaigns = await sql<Array<{ id: string }>>`
     INSERT INTO campaigns ${sql(
       Array.from({ length: jobsPerAccount }, (_, index) => ({
+        organization_id: TEST_ORGANIZATION_ID,
         name: `DB load ${size} / ${index + 1}`,
         publication_type: "FEED_IMAGE",
         status: "SCHEDULED",
@@ -70,10 +72,10 @@ async function seedQueue(size: number) {
 
   const [asset] = await sql<Array<{ id: string }>>`
     INSERT INTO media_assets (
-      original_filename, storage_provider, storage_key, mime_type, media_kind,
+      organization_id, original_filename, storage_provider, storage_key, mime_type, media_kind,
       size_bytes, checksum_sha256, width, height, processing_status
     ) VALUES (
-      ${`db-load-${size}.jpg`}, 'LOCAL', ${`db-load/${size}.jpg`}, 'image/jpeg', 'IMAGE',
+      ${TEST_ORGANIZATION_ID}, ${`db-load-${size}.jpg`}, 'LOCAL', ${`db-load/${size}.jpg`}, 'image/jpeg', 'IMAGE',
       1024, ${"a".repeat(64)}, 1080, 1080, 'READY'
     )
     RETURNING id
@@ -81,12 +83,18 @@ async function seedQueue(size: number) {
 
   await sql`
     INSERT INTO campaign_media ${sql(
-      campaigns.map((campaign) => ({ campaign_id: campaign.id, media_asset_id: asset.id, position: 0 })),
+      campaigns.map((campaign) => ({
+        organization_id: TEST_ORGANIZATION_ID,
+        campaign_id: campaign.id,
+        media_asset_id: asset.id,
+        position: 0,
+      })),
     )}
   `;
 
   const targets = campaigns.flatMap((campaign) =>
     accounts.map((account, position) => ({
+      organization_id: TEST_ORGANIZATION_ID,
       campaign_id: campaign.id,
       instagram_account_id: account.id,
       position,
@@ -98,6 +106,7 @@ async function seedQueue(size: number) {
   const seededJobs = await sql<Array<{ id: string }>>`
     INSERT INTO publication_jobs ${sql(
       targets.map((target) => ({
+        organization_id: TEST_ORGANIZATION_ID,
         campaign_id: target.campaign_id,
         instagram_account_id: target.instagram_account_id,
         scheduled_at: target.scheduled_at,

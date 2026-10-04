@@ -12,7 +12,7 @@ import {
   scheduleCampaign,
 } from "@/server/scheduler";
 import { assertTestDatabaseUrl } from "./database-safety.mjs";
-import { createAccounts, createCampaign, createJobs, createUser } from "./helpers";
+import { createAccounts, createCampaign, createJobs, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 describe("proteção do banco de integração", () => {
   it("aceita somente DATABASE_URL cujo banco termine exatamente em _test", () => {
@@ -30,16 +30,19 @@ describe("scheduler e snapshot de destinos", () => {
     const sql = getSqlClient();
     const accounts = await createAccounts(4, "order");
     const groups = await sql<Array<{ id: string; name: string }>>`
-      INSERT INTO account_groups (name) VALUES ('Grupo A'), ('Grupo B') RETURNING id, name
+      INSERT INTO account_groups (organization_id, name)
+      VALUES (${TEST_ORGANIZATION_ID}, 'Grupo A'), (${TEST_ORGANIZATION_ID}, 'Grupo B') RETURNING id, name
     `;
     const groupA = groups.find((group) => group.name === "Grupo A")!;
     const groupB = groups.find((group) => group.name === "Grupo B")!;
     await sql`
-      INSERT INTO account_group_members (group_id, instagram_account_id)
-      VALUES (${groupA.id}, ${accounts[0].id}), (${groupB.id}, ${accounts[2].id})
+      INSERT INTO account_group_members (organization_id, group_id, instagram_account_id)
+      VALUES (${TEST_ORGANIZATION_ID}, ${groupA.id}, ${accounts[0].id}),
+        (${TEST_ORGANIZATION_ID}, ${groupB.id}, ${accounts[2].id})
     `;
 
     await expect(resolveTargetIds({
+      organizationId: TEST_ORGANIZATION_ID,
       accountIds: [accounts[3].id, accounts[1].id],
       groupIds: [groupB.id, groupA.id],
     })).resolves.toEqual([accounts[3].id, accounts[1].id, accounts[2].id, accounts[0].id]);
@@ -50,6 +53,7 @@ describe("scheduler e snapshot de destinos", () => {
     const actorUserId = await createUser("carousel-order@example.test");
     const media = await sql<Array<{ id: string }>>`
       INSERT INTO media_assets ${sql(Array.from({ length: 3 }, (_, index) => ({
+        organization_id: TEST_ORGANIZATION_ID,
         original_filename: `carousel-${index}.jpg`,
         storage_provider: "LOCAL",
         storage_key: `carousel/${index}.jpg`,
@@ -69,6 +73,7 @@ describe("scheduler e snapshot de destinos", () => {
       publicationType: "CAROUSEL",
       mediaIds: chosenOrder,
       actorUserId,
+      organizationId: TEST_ORGANIZATION_ID,
     });
     const persisted = await sql<Array<{ id: string }>>`
       SELECT media_asset_id AS id FROM campaign_media WHERE campaign_id = ${campaignId} ORDER BY position
@@ -82,6 +87,7 @@ describe("scheduler e snapshot de destinos", () => {
     const accounts = await createAccounts(2, "reels_batch");
     const media = await sql<Array<{ id: string }>>`
       INSERT INTO media_assets ${sql(Array.from({ length: 3 }, (_, index) => ({
+        organization_id: TEST_ORGANIZATION_ID,
         original_filename: `reel-${index}.mp4`,
         storage_provider: "LOCAL",
         storage_key: `reels/${index}.mp4`,
@@ -102,9 +108,11 @@ describe("scheduler e snapshot de destinos", () => {
       mediaIds: media.map((asset) => asset.id),
       shareToFeed: true,
       actorUserId,
+      organizationId: TEST_ORGANIZATION_ID,
     });
 
     await previewCampaignSchedule({
+      organizationId: TEST_ORGANIZATION_ID,
       campaignId,
       targetIds: accounts.map((account) => account.id),
       startAt: new Date("2026-09-30T16:00:00Z"),
@@ -137,7 +145,7 @@ describe("scheduler e snapshot de destinos", () => {
       expect(gap).toBeLessThanOrEqual(3600);
     }
 
-    await expect(confirmCampaignSchedule(campaignId, actorUserId)).resolves.toEqual({ jobs: 6 });
+    await expect(confirmCampaignSchedule(campaignId, actorUserId, TEST_ORGANIZATION_ID)).resolves.toEqual({ jobs: 6 });
     const [confirmed] = await sql<Array<{ queued: number; status: string }>>`
       SELECT count(job.id) FILTER (WHERE job.status = 'QUEUED')::int AS queued, campaign.status
       FROM campaigns campaign
@@ -169,6 +177,7 @@ describe("scheduler e snapshot de destinos", () => {
     resetEnvForTests();
     try {
       await expect(scheduleCampaign({
+        organizationId: TEST_ORGANIZATION_ID,
         campaignId,
         targetIds: [account.id],
         startAt: new Date(),
@@ -197,15 +206,20 @@ describe("scheduler e snapshot de destinos", () => {
     const selectedAccounts = accounts.slice(0, 50).reverse();
     const campaignId = await createCampaign(actorUserId);
     const [group] = await sql<{ id: string }[]>`
-      INSERT INTO account_groups (name) VALUES ('Grupo original') RETURNING id
+      INSERT INTO account_groups (organization_id, name) VALUES (${TEST_ORGANIZATION_ID}, 'Grupo original') RETURNING id
     `;
     await sql`
       INSERT INTO account_group_members ${sql(
-        selectedAccounts.map((account) => ({ group_id: group.id, instagram_account_id: account.id })),
+        selectedAccounts.map((account) => ({
+          organization_id: TEST_ORGANIZATION_ID,
+          group_id: group.id,
+          instagram_account_id: account.id,
+        })),
       )}
     `;
 
     const input = {
+      organizationId: TEST_ORGANIZATION_ID,
       campaignId,
       targetIds: selectedAccounts.map((account) => account.id),
       startAt: new Date(Date.now() - 60_000),
@@ -244,8 +258,8 @@ describe("scheduler e snapshot de destinos", () => {
 
     await sql`DELETE FROM account_group_members WHERE group_id = ${group.id}`;
     await sql`
-      INSERT INTO account_group_members (group_id, instagram_account_id)
-      VALUES (${group.id}, ${accounts[50].id})
+      INSERT INTO account_group_members (organization_id, group_id, instagram_account_id)
+      VALUES (${TEST_ORGANIZATION_ID}, ${group.id}, ${accounts[50].id})
     `;
 
     const snapshotAfterGroupChange = await sql<Array<{ id: string; position: number }>>`
@@ -266,12 +280,13 @@ describe("scheduler e snapshot de destinos", () => {
     const accounts = await createAccounts(2, "rollback");
     const campaignId = await createCampaign(actorUserId);
     await sql`
-      INSERT INTO campaign_targets (campaign_id, instagram_account_id, position)
-      VALUES (${campaignId}, ${accounts[0].id}, 0)
+      INSERT INTO campaign_targets (organization_id, campaign_id, instagram_account_id, position)
+      VALUES (${TEST_ORGANIZATION_ID}, ${campaignId}, ${accounts[0].id}, 0)
     `;
     await createJobs(campaignId, [accounts[0]]);
 
     await expect(scheduleCampaign({
+      organizationId: TEST_ORGANIZATION_ID,
       campaignId,
       targetIds: accounts.map((account) => account.id),
       startAt: new Date(Date.now() - 60_000),
@@ -449,17 +464,17 @@ describe("controle de campanha", () => {
     const campaignId = await createCampaign(actorUserId, "SCHEDULED", "Pause resume cancel");
     await createJobs(campaignId, accounts);
 
-    await pauseCampaign(campaignId, actorUserId);
+    await pauseCampaign(campaignId, actorUserId, TEST_ORGANIZATION_ID);
     expect(await claimJob("worker-while-paused")).toBeNull();
     const [paused] = await sql<Array<{ status: string; paused: boolean }>>`
       SELECT status, paused_at IS NOT NULL AS paused FROM campaigns WHERE id = ${campaignId}
     `;
     expect(paused).toEqual({ status: "PAUSED", paused: true });
 
-    await resumeCampaign(campaignId, actorUserId);
+    await resumeCampaign(campaignId, actorUserId, TEST_ORGANIZATION_ID);
     const inFlight = await claimJob("worker-in-flight");
     expect(inFlight).not.toBeNull();
-    await cancelCampaign(campaignId, actorUserId);
+    await cancelCampaign(campaignId, actorUserId, TEST_ORGANIZATION_ID);
 
     const [campaign] = await sql<Array<{ status: string; paused: boolean; cancelled: boolean }>>`
       SELECT status, paused_at IS NOT NULL AS paused, cancelled_at IS NOT NULL AS cancelled

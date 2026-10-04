@@ -1,8 +1,9 @@
 import { createGroupAction, deleteGroupAction, updateGroupAction, updateGroupMembersAction } from "@/app/actions";
 import { getSqlClient } from "@/db/client";
 import { EmptyState, MessageBanner, PageHeader, Panel, StatusBadge, initials } from "@/components/ui";
+import { requireAdmin } from "@/server/auth";
 
-type GroupRow = { id: string; name: string; description: string | null; member_count: number };
+type GroupRow = { id: string; name: string; description: string | null; color: string; member_count: number };
 type AccountRow = { id: string; username: string; display_name: string | null; status: string };
 type Membership = { group_id: string; instagram_account_id: string };
 type PageProps = { searchParams: Promise<{ erro?: string | string[]; ok?: string | string[] }> };
@@ -12,23 +13,30 @@ function first(value?: string | string[]) {
 }
 
 export default async function GroupsPage({ searchParams }: PageProps) {
+  const user = await requireAdmin();
   const query = await searchParams;
   const sql = getSqlClient();
   const [groups, accounts, memberships] = await Promise.all([
     sql<GroupRow[]>`
-      SELECT group_row.id, group_row.name, group_row.description,
+      SELECT group_row.id, group_row.name, group_row.description, group_row.color,
         count(member.instagram_account_id)::int AS member_count
       FROM account_groups group_row
-      LEFT JOIN account_group_members member ON member.group_id = group_row.id
+      LEFT JOIN account_group_members member ON member.organization_id = group_row.organization_id
+        AND member.group_id = group_row.id
+      WHERE group_row.organization_id = ${user.organizationId}
       GROUP BY group_row.id
       ORDER BY group_row.name
     `,
     sql<AccountRow[]>`
       SELECT id, username, display_name, status
       FROM instagram_accounts
+      WHERE organization_id = ${user.organizationId}
       ORDER BY CASE WHEN status IN ('CONNECTED', 'TOKEN_EXPIRING') THEN 0 ELSE 1 END, username
     `,
-    sql<Membership[]>`SELECT group_id, instagram_account_id FROM account_group_members`,
+    sql<Membership[]>`
+      SELECT group_id, instagram_account_id FROM account_group_members
+      WHERE organization_id = ${user.organizationId}
+    `,
   ]);
   const membersByGroup = new Map<string, Set<string>>();
   for (const membership of memberships) {
@@ -57,6 +65,7 @@ export default async function GroupsPage({ searchParams }: PageProps) {
               Descrição <span className="optional-label">opcional</span>
               <textarea name="description" rows={3} maxLength={500} placeholder="Quando este grupo deve ser usado" />
             </label>
+            <label>Cor do grupo<input name="color" type="color" defaultValue="#4f46e5" /></label>
             <button className="button button-primary button-block" type="submit">Criar grupo</button>
           </form>
         </Panel>
@@ -65,7 +74,7 @@ export default async function GroupsPage({ searchParams }: PageProps) {
           {groups.length ? groups.map((group) => {
             const selected = membersByGroup.get(group.id) ?? new Set<string>();
             return (
-              <article className="group-card panel" key={group.id}>
+              <article className="group-card panel" key={group.id} style={{ borderLeft: `4px solid ${group.color}` }}>
                 <header className="group-card-header">
                   <div>
                     <h2>{group.name}</h2>
@@ -97,6 +106,7 @@ export default async function GroupsPage({ searchParams }: PageProps) {
                       Descrição <span className="optional-label">opcional</span>
                       <textarea name="description" rows={3} maxLength={500} defaultValue={group.description ?? ""} />
                     </label>
+                    <label>Cor do grupo<input name="color" type="color" defaultValue={group.color} /></label>
                     <button className="button button-secondary" type="submit">Salvar informações</button>
                   </form>
                 </details>

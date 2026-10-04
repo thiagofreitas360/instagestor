@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getSqlClient } from "@/db/client";
 import { EmptyState, formatDate, MetricCard, PageHeader, Panel, StatusBadge } from "@/components/ui";
+import { requireAdmin } from "@/server/auth";
 
 type Summary = {
   accounts_total: number;
@@ -33,6 +34,7 @@ type UpcomingJob = {
   scheduled_at: Date;
   campaign_id: string;
   campaign_name: string;
+  campaign_origin: "MANUAL" | "LOOP" | "SCHEDULE";
   username: string;
   timezone: string;
 };
@@ -66,31 +68,35 @@ function auditLabel(eventType: string) {
 }
 
 export default async function DashboardPage() {
+  const user = await requireAdmin();
   const sql = getSqlClient();
   const [[summary], campaigns, upcomingJobs, auditActivity] = await Promise.all([
     sql<Summary[]>`
       WITH config AS (
-        SELECT coalesce((SELECT default_timezone FROM settings WHERE id = true), 'America/Sao_Paulo') AS default_timezone
+        SELECT coalesce((SELECT default_timezone FROM settings WHERE organization_id = ${user.organizationId}), 'America/Sao_Paulo') AS default_timezone
       )
       SELECT
-        (SELECT count(*)::int FROM instagram_accounts) AS accounts_total,
-        (SELECT count(*)::int FROM instagram_accounts WHERE status IN ('CONNECTED', 'TOKEN_EXPIRING')) AS accounts_available,
-        (SELECT count(*)::int FROM instagram_accounts WHERE status IN ('REAUTH_REQUIRED', 'ERROR', 'DISABLED')) AS accounts_problem,
-        (SELECT count(*)::int FROM campaigns WHERE status IN ('SCHEDULED', 'RUNNING', 'PAUSED')) AS active_campaigns,
-        (SELECT count(*)::int FROM publication_jobs WHERE status IN (
+        (SELECT count(*)::int FROM instagram_accounts WHERE organization_id = ${user.organizationId}) AS accounts_total,
+        (SELECT count(*)::int FROM instagram_accounts WHERE organization_id = ${user.organizationId}
+          AND status IN ('CONNECTED', 'TOKEN_EXPIRING')) AS accounts_available,
+        (SELECT count(*)::int FROM instagram_accounts WHERE organization_id = ${user.organizationId}
+          AND status IN ('REAUTH_REQUIRED', 'ERROR', 'DISABLED')) AS accounts_problem,
+        (SELECT count(*)::int FROM campaigns WHERE organization_id = ${user.organizationId}
+          AND origin = 'MANUAL' AND status IN ('SCHEDULED', 'RUNNING', 'PAUSED')) AS active_campaigns,
+        (SELECT count(*)::int FROM publication_jobs WHERE organization_id = ${user.organizationId} AND status IN (
           'QUEUED', 'CLAIMED', 'CREATING_CONTAINER', 'WAITING_FOR_CONTAINER',
           'READY_TO_PUBLISH', 'PUBLISHING', 'RETRY_WAIT'
         )) AS jobs_pending,
-        (SELECT count(*)::int FROM publication_jobs WHERE status IN (
+        (SELECT count(*)::int FROM publication_jobs WHERE organization_id = ${user.organizationId} AND status IN (
           'CLAIMED', 'CREATING_CONTAINER', 'WAITING_FOR_CONTAINER', 'READY_TO_PUBLISH', 'PUBLISHING'
         )) AS jobs_processing,
-        (SELECT count(*)::int FROM publication_jobs WHERE status = 'RETRY_WAIT') AS jobs_retrying,
+        (SELECT count(*)::int FROM publication_jobs WHERE organization_id = ${user.organizationId} AND status = 'RETRY_WAIT') AS jobs_retrying,
         (SELECT count(*)::int FROM publication_jobs
-          WHERE status = 'PUBLISHED'
+          WHERE organization_id = ${user.organizationId} AND status = 'PUBLISHED'
             AND published_at >= date_trunc('day', timezone(config.default_timezone, now())) AT TIME ZONE config.default_timezone
         ) AS published_today,
         (SELECT count(*)::int FROM publication_jobs
-          WHERE status IN ('FAILED', 'RECONCILIATION_REQUIRED')
+          WHERE organization_id = ${user.organizationId} AND status IN ('FAILED', 'RECONCILIATION_REQUIRED')
             AND updated_at >= date_trunc('day', timezone(config.default_timezone, now())) AT TIME ZONE config.default_timezone
         ) AS failed_today,
         (SELECT max(last_seen_at) FROM worker_heartbeats) AS last_worker_seen,
@@ -104,19 +110,20 @@ export default async function DashboardPage() {
         count(job.id)::int AS jobs_total,
         count(job.id) FILTER (WHERE job.status = 'PUBLISHED')::int AS jobs_published
       FROM campaigns campaign
-      LEFT JOIN publication_jobs job ON job.campaign_id = campaign.id
+      LEFT JOIN publication_jobs job ON job.organization_id = campaign.organization_id AND job.campaign_id = campaign.id
+      WHERE campaign.organization_id = ${user.organizationId} AND campaign.origin = 'MANUAL'
       GROUP BY campaign.id
       ORDER BY campaign.updated_at DESC
       LIMIT 5
     `,
     sql<UpcomingJob[]>`
       SELECT job.id, job.scheduled_at,
-        campaign.id AS campaign_id, campaign.name AS campaign_name,
+        campaign.id AS campaign_id, campaign.name AS campaign_name, campaign.origin AS campaign_origin,
         account.username, campaign.timezone
       FROM publication_jobs job
-      JOIN campaigns campaign ON campaign.id = job.campaign_id
-      JOIN instagram_accounts account ON account.id = job.instagram_account_id
-      WHERE job.status IN ('QUEUED', 'RETRY_WAIT')
+      JOIN campaigns campaign ON campaign.organization_id = job.organization_id AND campaign.id = job.campaign_id
+      JOIN instagram_accounts account ON account.organization_id = job.organization_id AND account.id = job.instagram_account_id
+      WHERE job.organization_id = ${user.organizationId} AND job.status IN ('QUEUED', 'RETRY_WAIT')
       ORDER BY COALESCE(job.next_attempt_at, job.scheduled_at) ASC
       LIMIT 6
     `,
@@ -125,6 +132,7 @@ export default async function DashboardPage() {
         actor.email AS actor_email
       FROM audit_logs audit
       LEFT JOIN users actor ON actor.id = audit.actor_user_id
+      WHERE audit.organization_id = ${user.organizationId}
       ORDER BY audit.created_at DESC
       LIMIT 7
     `,
@@ -265,7 +273,7 @@ export default async function DashboardPage() {
                   <li key={job.id}>
                     <span className="timeline-dot" aria-hidden="true" />
                     <div>
-                      <Link href={`/campanhas/${job.campaign_id}`}>{job.campaign_name}</Link>
+                      <Link href={job.campaign_origin === "LOOP" ? "/loops" : job.campaign_origin === "SCHEDULE" ? "/escalas" : `/campanhas/${job.campaign_id}`}>{job.campaign_name}</Link>
                       <small>@{job.username}</small>
                     </div>
                     <time dateTime={job.scheduled_at.toISOString()}>{formatDate(job.scheduled_at, { timezone: job.timezone })}</time>

@@ -5,14 +5,14 @@ import { decryptToken, encryptToken, randomSecret, sha256 } from "@/lib/crypto";
 import { asInstagramError } from "@/lib/errors";
 import { getEnv } from "@/lib/env";
 import { getInstagramProvider, MetaInstagramProvider } from "@/providers";
-import { INSIGHTS_SCOPE } from "@/providers/instagram";
+import { COMMENTS_SCOPE, INSIGHTS_SCOPE } from "@/providers/instagram";
 import { markAccountUnavailableIfCurrent } from "@/jobs/account-availability";
 import { audit } from "./auth";
 
-const FAKE_SCOPES = ["instagram_business_basic", "instagram_business_content_publish", INSIGHTS_SCOPE];
+const FAKE_SCOPES = ["instagram_business_basic", "instagram_business_content_publish", INSIGHTS_SCOPE, COMMENTS_SCOPE];
 type Sql = TransactionSql;
 
-export async function createFakeAccounts(count: number, actorUserId: string) {
+export async function createFakeAccounts(count: number, actorUserId: string, organizationId: string) {
   const env = getEnv();
   if (env.INSTAGRAM_PROVIDER !== "fake" || (env.NODE_ENV === "production" && !env.ALLOW_FAKE_PROVIDER_IN_PRODUCTION)) {
     throw new Error("Contas fake exigem o provider fake explicitamente autorizado");
@@ -23,6 +23,7 @@ export async function createFakeAccounts(count: number, actorUserId: string) {
     const instagramUserId = `fake_${suffix}`;
     const username = `conta_${suffix}`;
     return {
+      organization_id: organizationId,
       instagram_user_id: instagramUserId,
       app_scoped_user_id: `app_${instagramUserId}`,
       username,
@@ -39,20 +40,20 @@ export async function createFakeAccounts(count: number, actorUserId: string) {
   return getSqlClient().begin(async (sql) => {
     const created = await sql<{ id: string }[]>`INSERT INTO instagram_accounts ${sql(rows)} RETURNING id`;
     await sql`
-      INSERT INTO audit_logs (actor_user_id, event_type, entity_type, metadata_json)
-      VALUES (${actorUserId}, 'ACCOUNT_CONNECTED', 'instagram_account', ${JSON.stringify({ fake: true, count })}::jsonb)
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, metadata_json)
+      VALUES (${organizationId}, ${actorUserId}, 'ACCOUNT_CONNECTED', 'instagram_account', ${JSON.stringify({ fake: true, count })}::jsonb)
     `;
     return created.map((account) => account.id);
   });
 }
 
-async function closeAccountJobs(sql: Sql, accountId: string, errorCode: string, errorMessage: string) {
+async function closeAccountJobs(sql: Sql, organizationId: string, accountId: string, errorCode: string, errorMessage: string) {
   await sql`
     UPDATE publication_jobs SET status = 'FAILED', last_error_code = ${errorCode},
       last_error_type = 'AUTH', last_error_message = ${errorMessage}, finished_at = now(),
       locked_at = NULL, locked_by = NULL, lock_expires_at = NULL,
       fencing_token = fencing_token + 1, updated_at = now()
-    WHERE instagram_account_id = ${accountId}
+    WHERE organization_id = ${organizationId} AND instagram_account_id = ${accountId}
       AND status IN ('QUEUED', 'RETRY_WAIT', 'CLAIMED', 'CREATING_CONTAINER', 'WAITING_FOR_CONTAINER', 'READY_TO_PUBLISH')
   `;
   await sql`
@@ -61,11 +62,13 @@ async function closeAccountJobs(sql: Sql, accountId: string, errorCode: string, 
       last_error_message = ${`${errorMessage} durante publicação; verificação manual obrigatória`},
       finished_at = now(), locked_at = NULL, locked_by = NULL, lock_expires_at = NULL,
       fencing_token = fencing_token + 1, updated_at = now()
-    WHERE instagram_account_id = ${accountId} AND status = 'PUBLISHING'
+    WHERE organization_id = ${organizationId} AND instagram_account_id = ${accountId} AND status = 'PUBLISHING'
   `;
   await sql`
     WITH affected AS (
-      SELECT campaign_id FROM publication_jobs WHERE instagram_account_id = ${accountId} GROUP BY campaign_id
+      SELECT campaign_id FROM publication_jobs
+      WHERE organization_id = ${organizationId} AND instagram_account_id = ${accountId}
+      GROUP BY campaign_id
     ), totals AS (
       SELECT job.campaign_id,
         count(*) FILTER (WHERE job.status NOT IN ('PUBLISHED', 'FAILED', 'CANCELLED', 'RECONCILIATION_REQUIRED')) AS pending,
@@ -81,54 +84,57 @@ async function closeAccountJobs(sql: Sql, accountId: string, errorCode: string, 
       END,
       updated_at = now()
     FROM totals
-    WHERE campaigns.id = totals.campaign_id AND totals.pending = 0
-      AND campaigns.status IN ('SCHEDULED', 'RUNNING', 'PAUSED')
+    WHERE campaigns.organization_id = ${organizationId} AND campaigns.id = totals.campaign_id AND totals.pending = 0
+      AND campaigns.origin <> 'LOOP' AND campaigns.status IN ('SCHEDULED', 'RUNNING', 'PAUSED')
   `;
 }
 
-export async function disconnectAccount(accountId: string, actorUserId: string) {
+export async function disconnectAccount(accountId: string, actorUserId: string, organizationId: string) {
   await getSqlClient().begin(async (sql) => {
     await sql`SELECT pg_advisory_xact_lock(hashtextextended(${`instagestor:meta:account:${accountId}:0`}, 0))`;
     const [account] = await sql<{ id: string }[]>`
       UPDATE instagram_accounts SET status = 'DISCONNECTED', encrypted_access_token = NULL,
-        disconnected_at = now(), updated_at = now() WHERE id = ${accountId} RETURNING id
+        disconnected_at = now(), updated_at = now()
+      WHERE organization_id = ${organizationId} AND id = ${accountId} RETURNING id
     `;
     if (!account) throw new Error("Conta não encontrada");
-    await closeAccountJobs(sql, accountId, "ACCOUNT_DISCONNECTED", "Conta desconectada");
+    await closeAccountJobs(sql, organizationId, accountId, "ACCOUNT_DISCONNECTED", "Conta desconectada");
     await sql`
-      INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id)
-      VALUES (${actorUserId}, 'ACCOUNT_DISCONNECTED', 'instagram_account', ${accountId})
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id)
+      VALUES (${organizationId}, ${actorUserId}, 'ACCOUNT_DISCONNECTED', 'instagram_account', ${accountId})
     `;
   });
 }
 
-export async function banAccount(accountId: string, reason: string, actorUserId: string) {
+export async function banAccount(accountId: string, reason: string, actorUserId: string, organizationId: string) {
   const trimmed = reason.trim();
   if (trimmed.length < 3 || trimmed.length > 500) throw new Error("Informe um motivo entre 3 e 500 caracteres");
   await getSqlClient().begin(async (sql) => {
     await sql`SELECT pg_advisory_xact_lock(hashtextextended(${`instagestor:meta:account:${accountId}:0`}, 0))`;
     const [account] = await sql<Array<{ status: string; last_error_code: string | null; last_error_at: Date | null }>>`
-      SELECT status, last_error_code, last_error_at FROM instagram_accounts WHERE id = ${accountId} FOR UPDATE
+      SELECT status, last_error_code, last_error_at FROM instagram_accounts
+      WHERE organization_id = ${organizationId} AND id = ${accountId} FOR UPDATE
     `;
     if (!account) throw new Error("Conta não encontrada");
     if (account.status === "BANNED") throw new Error("Conta já está marcada como banida");
     const [metrics] = await sql<Array<{ followers_count: number | null; media_count: number | null }>>`
       SELECT followers_count, media_count FROM account_daily_metrics
-      WHERE instagram_account_id = ${accountId} AND followers_count IS NOT NULL
+      WHERE organization_id = ${organizationId} AND instagram_account_id = ${accountId} AND followers_count IS NOT NULL
       ORDER BY day DESC LIMIT 1
     `;
     const [{ published }] = await sql<Array<{ published: number }>>`
-      SELECT count(*)::int AS published FROM publication_jobs WHERE instagram_account_id = ${accountId} AND status = 'PUBLISHED'
+      SELECT count(*)::int AS published FROM publication_jobs
+      WHERE organization_id = ${organizationId} AND instagram_account_id = ${accountId} AND status = 'PUBLISHED'
     `;
     await sql`
       UPDATE instagram_accounts SET status = 'BANNED', encrypted_access_token = NULL, banned_at = now(),
         ban_reason = ${trimmed}, disconnected_at = now(), updated_at = now()
-      WHERE id = ${accountId}
+      WHERE organization_id = ${organizationId} AND id = ${accountId}
     `;
-    await closeAccountJobs(sql, accountId, "ACCOUNT_BANNED", "Conta marcada como banida");
+    await closeAccountJobs(sql, organizationId, accountId, "ACCOUNT_BANNED", "Conta marcada como banida");
     await sql`
-      INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id, metadata_json)
-      VALUES (${actorUserId}, 'ACCOUNT_BANNED', 'instagram_account', ${accountId}, ${JSON.stringify({
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id, metadata_json)
+      VALUES (${organizationId}, ${actorUserId}, 'ACCOUNT_BANNED', 'instagram_account', ${accountId}, ${JSON.stringify({
         reason: trimmed,
         followersCount: metrics?.followers_count ?? null,
         mediaCount: metrics?.media_count ?? null,
@@ -142,19 +148,20 @@ export async function banAccount(accountId: string, reason: string, actorUserId:
   });
 }
 
-export async function unbanAccount(accountId: string, actorUserId: string) {
+export async function unbanAccount(accountId: string, actorUserId: string, organizationId: string) {
   const rows = await getSqlClient()`
     UPDATE instagram_accounts SET status = 'DISCONNECTED', banned_at = NULL, ban_reason = NULL, updated_at = now()
-    WHERE id = ${accountId} AND status = 'BANNED' RETURNING id
+    WHERE organization_id = ${organizationId} AND id = ${accountId} AND status = 'BANNED' RETURNING id
   `;
   if (!rows.length) throw new Error("Conta não está marcada como banida");
-  await audit(actorUserId, "ACCOUNT_UNBANNED", "instagram_account", accountId);
+  await audit(organizationId, actorUserId, "ACCOUNT_UNBANNED", "instagram_account", accountId);
 }
 
-export async function requestInsightsRefresh(accountId?: string) {
+export async function requestInsightsRefresh(organizationId: string, accountId?: string) {
   const rows = await getSqlClient()`
     UPDATE instagram_accounts SET insights_synced_at = NULL, updated_at = now()
-    WHERE status IN ('CONNECTED', 'TOKEN_EXPIRING') AND encrypted_access_token IS NOT NULL
+    WHERE organization_id = ${organizationId}
+      AND status IN ('CONNECTED', 'TOKEN_EXPIRING') AND encrypted_access_token IS NOT NULL
       AND ${INSIGHTS_SCOPE} = ANY(granted_scopes)
       AND (${accountId ?? null}::uuid IS NULL OR id = ${accountId ?? null}::uuid)
     RETURNING id
@@ -162,10 +169,11 @@ export async function requestInsightsRefresh(accountId?: string) {
   return rows.length;
 }
 
-export async function verifyAccount(accountId: string) {
+export async function verifyAccount(accountId: string, organizationId: string) {
   const [account] = await getSqlClient()<
     Array<{ instagram_user_id: string; encrypted_access_token: string | null; status: string }>
-  >`SELECT instagram_user_id, encrypted_access_token, status FROM instagram_accounts WHERE id = ${accountId}`;
+  >`SELECT instagram_user_id, encrypted_access_token, status FROM instagram_accounts
+    WHERE organization_id = ${organizationId} AND id = ${accountId}`;
   if (!account?.encrypted_access_token) throw new Error("Conta sem token utilizável");
   const accessToken = decryptToken(account.encrypted_access_token);
   try {
@@ -182,7 +190,7 @@ export async function verifyAccount(accountId: string) {
         publishing_limit_usage = ${limit.usage}, publishing_limit_total = ${limit.total},
         publishing_limit_checked_at = now(), last_error_at = NULL, last_error_code = NULL,
         last_error_message = NULL, updated_at = now()
-      WHERE id = ${accountId} AND encrypted_access_token = ${account.encrypted_access_token}
+      WHERE organization_id = ${organizationId} AND id = ${accountId} AND encrypted_access_token = ${account.encrypted_access_token}
         AND status = ${account.status}
       RETURNING id
     `;
@@ -192,6 +200,7 @@ export async function verifyAccount(accountId: string) {
     const updated = error.kind === "AUTH"
       ? await markAccountUnavailableIfCurrent({
           accountId,
+          organizationId,
           expectedEncryptedToken: account.encrypted_access_token,
           expectedStatus: account.status,
           nextStatus: "REAUTH_REQUIRED",
@@ -202,7 +211,8 @@ export async function verifyAccount(accountId: string) {
       : (await getSqlClient()`
           UPDATE instagram_accounts SET token_last_checked_at = now(), last_error_at = now(),
             last_error_code = ${error.code}, last_error_message = ${error.message}, updated_at = now()
-          WHERE id = ${accountId} AND encrypted_access_token = ${account.encrypted_access_token}
+          WHERE organization_id = ${organizationId} AND id = ${accountId}
+            AND encrypted_access_token = ${account.encrypted_access_token}
             AND status = ${account.status}
           RETURNING id
         `).length > 0;
@@ -211,52 +221,71 @@ export async function verifyAccount(accountId: string) {
   }
 }
 
-export async function createOauthState() {
+export async function createOauthState(organizationId: string, actorUserId: string) {
   if (getEnv().INSTAGRAM_PROVIDER !== "meta") throw new Error("OAuth real requer INSTAGRAM_PROVIDER=meta");
   const state = randomSecret(32);
   await getSqlClient()`
-    INSERT INTO oauth_states (nonce_hash, expires_at) VALUES (${sha256(state)}, now() + interval '10 minutes')
+    INSERT INTO oauth_states (organization_id, initiated_by, nonce_hash, expires_at)
+    VALUES (${organizationId}, ${actorUserId}, ${sha256(state)}, now() + interval '10 minutes')
   `;
   return state;
 }
 
 export async function consumeOauthState(state: string) {
-  const [valid] = await getSqlClient()<{ id: string }[]>`
+  const [valid] = await getSqlClient()<{ id: string; organization_id: string; initiated_by: string }[]>`
     UPDATE oauth_states SET used_at = now()
     WHERE nonce_hash = ${sha256(state)} AND used_at IS NULL AND expires_at > now()
-    RETURNING id
+    RETURNING id, organization_id, initiated_by
   `;
   if (!valid) throw new Error("OAuth state inválido, expirado ou já utilizado");
+  return valid;
 }
 
 export async function connectFromAuthorizationCode(code: string, state: string) {
-  await consumeOauthState(state);
+  const oauth = await consumeOauthState(state);
   const provider = new MetaInstagramProvider();
   const exchanged = await provider.exchangeAuthorizationCode(code);
   const profile = await provider.getProfile(exchanged.accessToken);
   const encrypted = encryptToken(exchanged.accessToken);
-  const [account] = await getSqlClient()<{ id: string; inserted: boolean }[]>`
-    INSERT INTO instagram_accounts (
-      instagram_user_id, app_scoped_user_id, username, display_name, profile_picture_url, account_type,
-      status, encrypted_access_token, authorized_at, token_expires_at, token_last_refreshed_at, token_last_checked_at,
-      last_successful_api_call_at, disconnected_at, granted_scopes, banned_at, ban_reason, insights_synced_at
-    ) VALUES (
-      ${profile.id}, ${profile.appScopedUserId ?? exchanged.appScopedUserId}, ${profile.username},
-      ${profile.displayName ?? null}, ${profile.profilePictureUrl ?? null}, ${profile.accountType ?? null},
-      'CONNECTED', ${encrypted}, now(), now() + ${exchanged.expiresIn} * interval '1 second', now(), now(), now(), NULL,
-      ${exchanged.permissions}, NULL, NULL, NULL
-    )
-    ON CONFLICT (instagram_user_id) DO UPDATE SET
-      app_scoped_user_id = EXCLUDED.app_scoped_user_id, username = EXCLUDED.username,
-      display_name = EXCLUDED.display_name, profile_picture_url = EXCLUDED.profile_picture_url,
-      account_type = EXCLUDED.account_type, status = 'CONNECTED',
-      encrypted_access_token = EXCLUDED.encrypted_access_token, token_expires_at = EXCLUDED.token_expires_at,
-      authorized_at = now(), token_last_refreshed_at = now(), token_last_checked_at = now(), last_successful_api_call_at = now(),
-      disconnected_at = NULL, granted_scopes = EXCLUDED.granted_scopes, banned_at = NULL, ban_reason = NULL,
-      insights_synced_at = NULL, updated_at = now()
-    RETURNING id, (xmax = 0) AS inserted
-  `;
-  await audit(null, account.inserted ? "ACCOUNT_CONNECTED" : "ACCOUNT_RECONNECTED", "instagram_account", account.id);
+  const account = await getSqlClient().begin(async (sql) => {
+    const [existing] = await sql<Array<{ id: string; organization_id: string }>>`
+      SELECT id, organization_id FROM instagram_accounts WHERE instagram_user_id = ${profile.id} FOR UPDATE
+    `;
+    if (existing && existing.organization_id !== oauth.organization_id) {
+      throw new Error("Esta conta do Instagram já pertence a outra organização");
+    }
+    const [saved] = await sql<{ id: string; inserted: boolean }[]>`
+      INSERT INTO instagram_accounts (
+        organization_id, instagram_user_id, app_scoped_user_id, username, display_name, profile_picture_url, account_type,
+        status, encrypted_access_token, authorized_at, token_expires_at, token_last_refreshed_at, token_last_checked_at,
+        last_successful_api_call_at, disconnected_at, granted_scopes, banned_at, ban_reason, insights_synced_at
+      ) VALUES (
+        ${oauth.organization_id}, ${profile.id}, ${profile.appScopedUserId ?? exchanged.appScopedUserId}, ${profile.username},
+        ${profile.displayName ?? null}, ${profile.profilePictureUrl ?? null}, ${profile.accountType ?? null},
+        'CONNECTED', ${encrypted}, now(), now() + ${exchanged.expiresIn} * interval '1 second', now(), now(), now(), NULL,
+        ${exchanged.permissions}, NULL, NULL, NULL
+      )
+      ON CONFLICT (instagram_user_id) DO UPDATE SET
+        app_scoped_user_id = EXCLUDED.app_scoped_user_id, username = EXCLUDED.username,
+        display_name = EXCLUDED.display_name, profile_picture_url = EXCLUDED.profile_picture_url,
+        account_type = EXCLUDED.account_type, status = 'CONNECTED',
+        encrypted_access_token = EXCLUDED.encrypted_access_token, token_expires_at = EXCLUDED.token_expires_at,
+        authorized_at = now(), token_last_refreshed_at = now(), token_last_checked_at = now(), last_successful_api_call_at = now(),
+        disconnected_at = NULL, granted_scopes = EXCLUDED.granted_scopes, banned_at = NULL, ban_reason = NULL,
+        insights_synced_at = NULL, updated_at = now()
+      WHERE instagram_accounts.organization_id = EXCLUDED.organization_id
+      RETURNING id, (xmax = 0) AS inserted
+    `;
+    if (!saved) throw new Error("Não foi possível vincular a conta à organização");
+    return saved;
+  });
+  await audit(
+    oauth.organization_id,
+    oauth.initiated_by,
+    account.inserted ? "ACCOUNT_CONNECTED" : "ACCOUNT_RECONNECTED",
+    "instagram_account",
+    account.id,
+  );
   return account.id;
 }
 
@@ -292,20 +321,22 @@ export async function deauthorizeBySignedRequest(signedRequest: string) {
   const issuedAt = payload.issued_at!;
   const eventHash = sha256(`meta-deauthorization|${signedRequest}`);
   await getSqlClient().begin(async (sql) => {
-    const [candidate] = await sql<Array<{ id: string }>>`
-      SELECT id FROM instagram_accounts WHERE app_scoped_user_id = ${appScopedUserId}
+    const [candidate] = await sql<Array<{ id: string; organization_id: string }>>`
+      SELECT id, organization_id FROM instagram_accounts WHERE app_scoped_user_id = ${appScopedUserId}
     `;
     if (!candidate) return;
     await sql`SELECT pg_advisory_xact_lock(hashtextextended(${`instagestor:meta:account:${candidate.id}:0`}, 0))`;
-    const [account] = await sql<Array<{ id: string }>>`
-      SELECT id FROM instagram_accounts
-      WHERE id = ${candidate.id} AND app_scoped_user_id = ${appScopedUserId} FOR UPDATE
+    const [account] = await sql<Array<{ id: string; organization_id: string }>>`
+      SELECT id, organization_id FROM instagram_accounts
+      WHERE organization_id = ${candidate.organization_id}
+        AND id = ${candidate.id} AND app_scoped_user_id = ${appScopedUserId} FOR UPDATE
     `;
     if (!account) return;
 
     const [alreadyProcessed] = await sql<Array<{ id: string }>>`
       SELECT id FROM audit_logs
-      WHERE event_type IN ('ACCOUNT_DEAUTHORIZED', 'ACCOUNT_DEAUTHORIZATION_IGNORED')
+      WHERE organization_id = ${account.organization_id}
+        AND event_type IN ('ACCOUNT_DEAUTHORIZED', 'ACCOUNT_DEAUTHORIZATION_IGNORED')
         AND metadata_json->>'eventHash' = ${eventHash}
       LIMIT 1
     `;
@@ -314,15 +345,15 @@ export async function deauthorizeBySignedRequest(signedRequest: string) {
     const [disconnected] = await sql<Array<{ id: string }>>`
       UPDATE instagram_accounts SET status = 'DISCONNECTED', encrypted_access_token = NULL,
         disconnected_at = now(), updated_at = now()
-      WHERE id = ${account.id}
+      WHERE organization_id = ${account.organization_id} AND id = ${account.id}
         AND authorized_at <= to_timestamp(${issuedAt})
       RETURNING id
     `;
     if (!disconnected) {
       await sql`
-        INSERT INTO audit_logs (event_type, entity_type, entity_id, metadata_json)
+        INSERT INTO audit_logs (organization_id, event_type, entity_type, entity_id, metadata_json)
         VALUES (
-          'ACCOUNT_DEAUTHORIZATION_IGNORED', 'instagram_account', ${account.id},
+          ${account.organization_id}, 'ACCOUNT_DEAUTHORIZATION_IGNORED', 'instagram_account', ${account.id},
           ${JSON.stringify({ eventHash, issuedAt, reason: "stale_after_reconnect" })}::jsonb
         )
       `;
@@ -333,7 +364,7 @@ export async function deauthorizeBySignedRequest(signedRequest: string) {
         last_error_type = 'AUTH', last_error_message = 'Conta desautorizada na Meta', finished_at = now(),
         locked_at = NULL, locked_by = NULL, lock_expires_at = NULL,
         fencing_token = fencing_token + 1, updated_at = now()
-      WHERE instagram_account_id = ${account.id}
+      WHERE organization_id = ${account.organization_id} AND instagram_account_id = ${account.id}
         AND status IN ('QUEUED', 'RETRY_WAIT', 'CLAIMED', 'CREATING_CONTAINER', 'WAITING_FOR_CONTAINER', 'READY_TO_PUBLISH')
     `;
     await sql`
@@ -342,11 +373,13 @@ export async function deauthorizeBySignedRequest(signedRequest: string) {
         last_error_message = 'Conta desautorizada durante publicação; verificação manual obrigatória',
         finished_at = now(), locked_at = NULL, locked_by = NULL, lock_expires_at = NULL,
         fencing_token = fencing_token + 1, updated_at = now()
-      WHERE instagram_account_id = ${account.id} AND status = 'PUBLISHING'
+      WHERE organization_id = ${account.organization_id} AND instagram_account_id = ${account.id} AND status = 'PUBLISHING'
     `;
     await sql`
       WITH affected AS (
-        SELECT campaign_id FROM publication_jobs WHERE instagram_account_id = ${account.id} GROUP BY campaign_id
+        SELECT campaign_id FROM publication_jobs
+        WHERE organization_id = ${account.organization_id} AND instagram_account_id = ${account.id}
+        GROUP BY campaign_id
       ), totals AS (
         SELECT job.campaign_id,
           count(*) FILTER (WHERE job.status NOT IN ('PUBLISHED', 'FAILED', 'CANCELLED', 'RECONCILIATION_REQUIRED')) AS pending,
@@ -362,13 +395,14 @@ export async function deauthorizeBySignedRequest(signedRequest: string) {
         END,
         updated_at = now()
       FROM totals
-      WHERE campaigns.id = totals.campaign_id AND totals.pending = 0
-        AND campaigns.status IN ('SCHEDULED', 'RUNNING', 'PAUSED')
+      WHERE campaigns.organization_id = ${account.organization_id}
+        AND campaigns.id = totals.campaign_id AND totals.pending = 0
+        AND campaigns.origin <> 'LOOP' AND campaigns.status IN ('SCHEDULED', 'RUNNING', 'PAUSED')
     `;
     await sql`
-      INSERT INTO audit_logs (event_type, entity_type, entity_id, metadata_json)
+      INSERT INTO audit_logs (organization_id, event_type, entity_type, entity_id, metadata_json)
       VALUES (
-        'ACCOUNT_DEAUTHORIZED', 'instagram_account', ${account.id},
+        ${account.organization_id}, 'ACCOUNT_DEAUTHORIZED', 'instagram_account', ${account.id},
         ${JSON.stringify({ eventHash, issuedAt })}::jsonb
       )
     `;
@@ -390,28 +424,29 @@ export async function deleteDataBySignedRequest(signedRequest: string) {
     `;
     if (existing?.metadata_json.confirmationCode) return existing.metadata_json.confirmationCode;
 
-    const [candidate] = await sql<Array<{ id: string }>>`
-      SELECT id FROM instagram_accounts WHERE app_scoped_user_id = ${appScopedUserId}
+    const [candidate] = await sql<Array<{ id: string; organization_id: string }>>`
+      SELECT id, organization_id FROM instagram_accounts WHERE app_scoped_user_id = ${appScopedUserId}
     `;
     if (candidate) {
       await sql`SELECT pg_advisory_xact_lock(hashtextextended(${`instagestor:meta:account:${candidate.id}:0`}, 0))`;
     }
     const [account] = candidate
-      ? await sql<Array<{ id: string }>>`
-          SELECT id FROM instagram_accounts
-          WHERE id = ${candidate.id} AND app_scoped_user_id = ${appScopedUserId}
+      ? await sql<Array<{ id: string; organization_id: string }>>`
+          SELECT id, organization_id FROM instagram_accounts
+          WHERE organization_id = ${candidate.organization_id}
+            AND id = ${candidate.id} AND app_scoped_user_id = ${appScopedUserId}
           FOR UPDATE
         `
       : [];
     if (account) {
-      await sql`DELETE FROM account_group_members WHERE instagram_account_id = ${account.id}`;
-      await sql`DELETE FROM account_media WHERE instagram_account_id = ${account.id}`;
-      await sql`DELETE FROM account_daily_metrics WHERE instagram_account_id = ${account.id}`;
+      await sql`DELETE FROM account_group_members WHERE organization_id = ${account.organization_id} AND instagram_account_id = ${account.id}`;
+      await sql`DELETE FROM account_media WHERE organization_id = ${account.organization_id} AND instagram_account_id = ${account.id}`;
+      await sql`DELETE FROM account_daily_metrics WHERE organization_id = ${account.organization_id} AND instagram_account_id = ${account.id}`;
       await sql`
         UPDATE publication_jobs SET status = 'CANCELLED', finished_at = now(),
           locked_at = NULL, locked_by = NULL, lock_expires_at = NULL,
           fencing_token = fencing_token + 1, updated_at = now()
-        WHERE instagram_account_id = ${account.id}
+        WHERE organization_id = ${account.organization_id} AND instagram_account_id = ${account.id}
           AND status IN ('QUEUED', 'RETRY_WAIT', 'CLAIMED', 'CREATING_CONTAINER', 'WAITING_FOR_CONTAINER', 'READY_TO_PUBLISH')
       `;
       await sql`
@@ -420,7 +455,7 @@ export async function deleteDataBySignedRequest(signedRequest: string) {
           last_error_message = 'Exclusão solicitada durante publicação; verificação manual obrigatória',
           finished_at = now(), locked_at = NULL, locked_by = NULL, lock_expires_at = NULL,
           fencing_token = fencing_token + 1, updated_at = now()
-        WHERE instagram_account_id = ${account.id} AND status = 'PUBLISHING'
+        WHERE organization_id = ${account.organization_id} AND instagram_account_id = ${account.id} AND status = 'PUBLISHING'
       `;
       await sql`
         UPDATE publication_jobs SET meta_container_id = NULL, meta_child_container_ids = NULL,
@@ -428,7 +463,7 @@ export async function deleteDataBySignedRequest(signedRequest: string) {
           last_error_message = CASE WHEN status = 'RECONCILIATION_REQUIRED'
             THEN 'Resultado ambíguo após solicitação de exclusão de dados' ELSE NULL END,
           updated_at = now()
-        WHERE instagram_account_id = ${account.id}
+        WHERE organization_id = ${account.organization_id} AND instagram_account_id = ${account.id}
       `;
       await sql`
         UPDATE instagram_accounts SET instagram_user_id = 'deleted_' || id::text,
@@ -441,11 +476,13 @@ export async function deleteDataBySignedRequest(signedRequest: string) {
           publishing_limit_checked_at = NULL, disconnected_at = now(), updated_at = now(),
           biography = NULL, website = NULL, granted_scopes = NULL, insights_error_code = NULL,
           insights_synced_at = NULL
-        WHERE id = ${account.id}
+        WHERE organization_id = ${account.organization_id} AND id = ${account.id}
       `;
       await sql`
         WITH affected AS (
-          SELECT campaign_id FROM publication_jobs WHERE instagram_account_id = ${account.id} GROUP BY campaign_id
+          SELECT campaign_id FROM publication_jobs
+          WHERE organization_id = ${account.organization_id} AND instagram_account_id = ${account.id}
+          GROUP BY campaign_id
         ), totals AS (
           SELECT job.campaign_id,
             count(*) FILTER (WHERE job.status NOT IN ('PUBLISHED', 'FAILED', 'CANCELLED', 'RECONCILIATION_REQUIRED')) AS pending,
@@ -464,16 +501,17 @@ export async function deleteDataBySignedRequest(signedRequest: string) {
           END,
           updated_at = now()
         FROM totals
-        WHERE campaigns.id = totals.campaign_id AND totals.pending = 0
-          AND campaigns.status IN ('SCHEDULED', 'RUNNING', 'PAUSED')
+        WHERE campaigns.organization_id = ${account.organization_id}
+          AND campaigns.id = totals.campaign_id AND totals.pending = 0
+          AND campaigns.origin <> 'LOOP' AND campaigns.status IN ('SCHEDULED', 'RUNNING', 'PAUSED')
       `;
     }
 
     const confirmationCode = randomSecret(18);
     await sql`
-      INSERT INTO audit_logs (event_type, entity_type, entity_id, metadata_json)
+      INSERT INTO audit_logs (organization_id, event_type, entity_type, entity_id, metadata_json)
       VALUES (
-        'DATA_DELETION_REQUESTED', 'instagram_account', ${account?.id ?? null},
+        ${account?.organization_id ?? null}, 'DATA_DELETION_REQUESTED', 'instagram_account', ${account?.id ?? null},
         ${JSON.stringify({ confirmationCode, appScopedHash, eventHash, issuedAt: payload.issued_at, completed: true })}::jsonb
       )
     `;

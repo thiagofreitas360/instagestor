@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getSqlClient } from "@/db/client";
 import { banAccount, createFakeAccounts, requestInsightsRefresh, unbanAccount } from "@/server/accounts";
-import { createAccounts, createCampaign, createJobs, createUser } from "./helpers";
+import { createAccounts, createCampaign, createJobs, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 describe("banimento manual", () => {
   it("marca a conta, fecha jobs pendentes e registra contexto na auditoria", async () => {
@@ -13,8 +13,9 @@ describe("banimento manual", () => {
         encrypted_access_token = 'cifrado' WHERE id = ${account.id}
     `;
     await sql`
-      INSERT INTO account_daily_metrics (instagram_account_id, day, followers_count, media_count)
-      VALUES (${account.id}, current_date - 1, 900, 12), (${account.id}, current_date, 950, 13)
+      INSERT INTO account_daily_metrics (organization_id, instagram_account_id, day, followers_count, media_count)
+      VALUES (${TEST_ORGANIZATION_ID}, ${account.id}, current_date - 1, 900, 12),
+        (${TEST_ORGANIZATION_ID}, ${account.id}, current_date, 950, 13)
     `;
     const campaignId = await createCampaign(userId, "RUNNING");
     const [job] = await createJobs(campaignId, [account]);
@@ -22,7 +23,7 @@ describe("banimento manual", () => {
     const secondCampaign = await createCampaign(userId, "SCHEDULED", "Pendente");
     const [pending] = await createJobs(secondCampaign, [account]);
 
-    await banAccount(account.id, "  Suspensa pela Meta após checkpoint  ", userId);
+    await banAccount(account.id, "  Suspensa pela Meta após checkpoint  ", userId, TEST_ORGANIZATION_ID);
 
     const [row] = await sql<Array<{ status: string; ban_reason: string; banned_at: Date | null; encrypted_access_token: string | null }>>`
       SELECT status, ban_reason, banned_at, encrypted_access_token FROM instagram_accounts WHERE id = ${account.id}
@@ -55,17 +56,17 @@ describe("banimento manual", () => {
   it("rejeita motivo curto e banimento duplicado", async () => {
     const userId = await createUser();
     const [account] = await createAccounts(1, "dup");
-    await expect(banAccount(account.id, "ab", userId)).rejects.toThrow(/motivo/i);
-    await banAccount(account.id, "Motivo válido", userId);
-    await expect(banAccount(account.id, "Outro motivo", userId)).rejects.toThrow(/já está/i);
+    await expect(banAccount(account.id, "ab", userId, TEST_ORGANIZATION_ID)).rejects.toThrow(/motivo/i);
+    await banAccount(account.id, "Motivo válido", userId, TEST_ORGANIZATION_ID);
+    await expect(banAccount(account.id, "Outro motivo", userId, TEST_ORGANIZATION_ID)).rejects.toThrow(/já está/i);
   });
 
   it("desmarca voltando para DISCONNECTED e preserva o histórico", async () => {
     const sql = getSqlClient();
     const userId = await createUser();
     const [account] = await createAccounts(1, "unban");
-    await banAccount(account.id, "Motivo válido", userId);
-    await unbanAccount(account.id, userId);
+    await banAccount(account.id, "Motivo válido", userId, TEST_ORGANIZATION_ID);
+    await unbanAccount(account.id, userId, TEST_ORGANIZATION_ID);
     const [row] = await sql<Array<{ status: string; banned_at: Date | null; ban_reason: string | null }>>`
       SELECT status, banned_at, ban_reason FROM instagram_accounts WHERE id = ${account.id}
     `;
@@ -74,7 +75,7 @@ describe("banimento manual", () => {
       SELECT event_type FROM audit_logs WHERE entity_id = ${account.id} ORDER BY created_at
     `;
     expect(events.map((event) => event.event_type)).toEqual(["ACCOUNT_BANNED", "ACCOUNT_UNBANNED"]);
-    await expect(unbanAccount(account.id, userId)).rejects.toThrow(/não está/i);
+    await expect(unbanAccount(account.id, userId, TEST_ORGANIZATION_ID)).rejects.toThrow(/não está/i);
   });
 });
 
@@ -82,26 +83,26 @@ describe("escopos e atualização de insights", () => {
   it("contas fake nascem com o escopo de insights e podem pedir sync imediato", async () => {
     const sql = getSqlClient();
     const userId = await createUser();
-    await createFakeAccounts(2, userId);
+    await createFakeAccounts(2, userId, TEST_ORGANIZATION_ID);
     const accounts = await sql<Array<{ id: string; granted_scopes: string[] }>>`
       SELECT id, granted_scopes FROM instagram_accounts ORDER BY username
     `;
     expect(accounts[0].granted_scopes).toContain("instagram_business_manage_insights");
     await sql`UPDATE instagram_accounts SET insights_synced_at = now()`;
 
-    expect(await requestInsightsRefresh(accounts[0].id)).toBe(1);
+    expect(await requestInsightsRefresh(TEST_ORGANIZATION_ID, accounts[0].id)).toBe(1);
     const [first] = await sql<Array<{ insights_synced_at: Date | null }>>`
       SELECT insights_synced_at FROM instagram_accounts WHERE id = ${accounts[0].id}
     `;
     expect(first.insights_synced_at).toBeNull();
 
-    expect(await requestInsightsRefresh()).toBe(2);
+    expect(await requestInsightsRefresh(TEST_ORGANIZATION_ID)).toBe(2);
   });
 
   it("não marca conta sem escopo de insights", async () => {
     const sql = getSqlClient();
     const [account] = await createAccounts(1, "noscope");
     await sql`UPDATE instagram_accounts SET encrypted_access_token = 'x', insights_synced_at = now() WHERE id = ${account.id}`;
-    expect(await requestInsightsRefresh()).toBe(0);
+    expect(await requestInsightsRefresh(TEST_ORGANIZATION_ID)).toBe(0);
   });
 });

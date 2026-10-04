@@ -32,7 +32,7 @@ describe("MetaInstagramProvider OAuth e ciclo do token", () => {
     expect(url.origin + url.pathname).toBe("https://www.instagram.com/oauth/authorize");
     expect(url.searchParams.get("state")).toBe("nonce-imprevisivel");
     expect(url.searchParams.get("scope")).toBe(
-      "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights",
+      "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights,instagram_business_manage_comments",
     );
     expect(url.searchParams.get("force_reauth")).toBe("true");
     expect(url.searchParams.get("redirect_uri")).toBe(process.env.INSTAGRAM_REDIRECT_URI);
@@ -148,6 +148,22 @@ describe("MetaInstagramProvider publicação, limite e falhas", () => {
     await expect(new MetaInstagramProvider().publishContainer("ig-1", "container-1", "token")).rejects.toMatchObject({
       kind: "VALIDATION",
       code: "META_100",
+    });
+  });
+
+  it("publica comentário no ID da mídia e trata falha transitória como ambígua", async () => {
+    const mockedFetch = fetchMock(
+      jsonResponse({ id: "comment-1" }),
+      jsonResponse({ error: { message: "upstream", code: 2, is_transient: true } }, 503),
+    );
+    const provider = new MetaInstagramProvider();
+    await expect(provider.createComment("media-1", "Link na bio", "token")).resolves.toBe("comment-1");
+    const [url, init] = mockedFetch.mock.calls[0];
+    expect(new URL(String(url)).pathname).toBe("/v26.0/media-1/comments");
+    expect((init?.body as URLSearchParams).get("message")).toBe("Link na bio");
+    await expect(provider.createComment("media-1", "Link na bio", "token")).rejects.toMatchObject({
+      kind: "AMBIGUOUS",
+      code: "META_COMMENT_AMBIGUOUS",
     });
   });
 

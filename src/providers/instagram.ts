@@ -10,6 +10,7 @@ export type InstagramProfile = {
 };
 
 export const INSIGHTS_SCOPE = "instagram_business_manage_insights";
+export const COMMENTS_SCOPE = "instagram_business_manage_comments";
 export type MediaProductType = "FEED" | "REELS" | "STORY";
 export type AccountSnapshot = {
   username: string; displayName?: string; profilePictureUrl?: string;
@@ -50,6 +51,7 @@ export interface InstagramProvider {
   createMediaContainer(input: ContainerInput): Promise<string>;
   getContainerStatus(containerId: string, accessToken: string): Promise<"PROCESSING" | "FINISHED" | "PUBLISHED" | "ERROR">;
   publishContainer(accountId: string, containerId: string, accessToken: string): Promise<string>;
+  createComment(mediaId: string, message: string, accessToken: string): Promise<string>;
   getPublishingLimit(accountId: string, accessToken: string): Promise<{ usage: number; total: number }>;
   refreshAccessToken(accessToken: string): Promise<{ accessToken: string; expiresIn: number }>;
   getAccountSnapshot(accessToken: string): Promise<AccountSnapshot>;

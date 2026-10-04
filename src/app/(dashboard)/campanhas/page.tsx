@@ -2,6 +2,7 @@ import Link from "next/link";
 import { duplicateCampaignAction } from "@/app/actions";
 import { getSqlClient } from "@/db/client";
 import { EmptyState, formatDate, formatPublicationType, MessageBanner, PageHeader, Panel, StatusBadge } from "@/components/ui";
+import { requireAdmin } from "@/server/auth";
 
 type CampaignRow = {
   id: string;
@@ -20,6 +21,7 @@ type PageProps = { searchParams: Promise<{ erro?: string | string[]; ok?: string
 function first(value?: string | string[]) { return Array.isArray(value) ? value[0] : value; }
 
 export default async function CampaignsPage({ searchParams }: PageProps) {
+  const user = await requireAdmin();
   const query = await searchParams;
   const campaigns = await getSqlClient()<CampaignRow[]>`
     SELECT campaign.id, campaign.name, campaign.publication_type, campaign.status,
@@ -29,8 +31,9 @@ export default async function CampaignsPage({ searchParams }: PageProps) {
       count(DISTINCT job.id) FILTER (WHERE job.status = 'PUBLISHED')::int AS jobs_published,
       count(DISTINCT job.id) FILTER (WHERE job.status IN ('FAILED', 'RECONCILIATION_REQUIRED'))::int AS jobs_failed
     FROM campaigns campaign
-    LEFT JOIN campaign_targets target ON target.campaign_id = campaign.id
-    LEFT JOIN publication_jobs job ON job.campaign_id = campaign.id
+    LEFT JOIN campaign_targets target ON target.organization_id = campaign.organization_id AND target.campaign_id = campaign.id
+    LEFT JOIN publication_jobs job ON job.organization_id = campaign.organization_id AND job.campaign_id = campaign.id
+    WHERE campaign.organization_id = ${user.organizationId} AND campaign.origin = 'MANUAL'
     GROUP BY campaign.id
     ORDER BY campaign.updated_at DESC
   `;

@@ -11,6 +11,7 @@ import { EmptyState, formatBytes, formatDate, MessageBanner, PageHeader, Panel, 
 import { MediaUploadForm } from "@/components/media-upload-form";
 import { getEnv } from "@/lib/env";
 import { getPrivateMediaUrl } from "@/providers/storage";
+import { requireAdmin } from "@/server/auth";
 
 type MediaRow = {
   id: string;
@@ -34,6 +35,7 @@ type PageProps = { searchParams: Promise<{ erro?: string | string[]; ok?: string
 function first(value?: string | string[]) { return Array.isArray(value) ? value[0] : value; }
 
 export default async function MediaPage({ searchParams }: PageProps) {
+  const user = await requireAdmin();
   const query = await searchParams;
   const sql = getSqlClient();
   const [media, folders] = await Promise.all([
@@ -43,9 +45,9 @@ export default async function MediaPage({ searchParams }: PageProps) {
         asset.validation_error, asset.created_at, asset.folder_id, folder.name AS folder_name,
         count(DISTINCT campaign_media.campaign_id)::int AS campaign_count
       FROM media_assets asset
-      LEFT JOIN media_folders folder ON folder.id = asset.folder_id
-      LEFT JOIN campaign_media ON campaign_media.media_asset_id = asset.id
-      WHERE asset.deleted_at IS NULL
+      LEFT JOIN media_folders folder ON folder.organization_id = asset.organization_id AND folder.id = asset.folder_id
+      LEFT JOIN campaign_media ON campaign_media.organization_id = asset.organization_id AND campaign_media.media_asset_id = asset.id
+      WHERE asset.organization_id = ${user.organizationId} AND asset.deleted_at IS NULL
       GROUP BY asset.id, folder.name
       ORDER BY asset.created_at DESC
     `,
@@ -53,7 +55,8 @@ export default async function MediaPage({ searchParams }: PageProps) {
       SELECT folder.id, folder.name,
         count(asset.id) FILTER (WHERE asset.deleted_at IS NULL)::int AS media_count
       FROM media_folders folder
-      LEFT JOIN media_assets asset ON asset.folder_id = folder.id
+      LEFT JOIN media_assets asset ON asset.organization_id = folder.organization_id AND asset.folder_id = folder.id
+      WHERE folder.organization_id = ${user.organizationId}
       GROUP BY folder.id ORDER BY folder.name
     `,
   ]);
@@ -67,7 +70,7 @@ export default async function MediaPage({ searchParams }: PageProps) {
   const mediaWithUrls = filteredMedia.map((asset) => ({
     ...asset,
     previewUrl: asset.processing_status === "READY"
-      ? getPrivateMediaUrl(asset.id)
+      ? getPrivateMediaUrl(asset.id, user.organizationId)
       : null,
   }));
   const readyCount = media.filter((asset) => asset.processing_status === "READY").length;

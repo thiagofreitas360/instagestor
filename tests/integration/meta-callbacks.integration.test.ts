@@ -4,7 +4,7 @@ import { getSqlClient } from "@/db/client";
 import { encryptToken } from "@/lib/crypto";
 import { resetEnvForTests } from "@/lib/env";
 import { deauthorizeBySignedRequest, deleteDataBySignedRequest } from "@/server/accounts";
-import { createCampaign, createUser } from "./helpers";
+import { createCampaign, createOrganization, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 const appSecret = "integration-meta-callback-secret";
 
@@ -16,12 +16,13 @@ function signDeauthorization(userId: string, issuedAt: number) {
   return `${signature}.${payload}`;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   process.env.INSTAGRAM_PROVIDER = "meta";
   process.env.INSTAGRAM_APP_ID = "integration-app-id";
   process.env.INSTAGRAM_APP_SECRET = appSecret;
   process.env.INSTAGRAM_REDIRECT_URI = "http://localhost:3000/api/instagram/oauth/callback";
   resetEnvForTests();
+  await createOrganization(TEST_ORGANIZATION_ID, "InstaGestor Teste", "instagestor-teste");
 });
 
 afterEach(() => {
@@ -34,9 +35,9 @@ describe("callbacks Meta concorrentes", () => {
     const appScopedId = `app-${randomUUID()}`;
     const [account] = await getSqlClient()<{ id: string }[]>`
       INSERT INTO instagram_accounts (
-        instagram_user_id, app_scoped_user_id, username, encrypted_access_token, authorized_at
+        organization_id, instagram_user_id, app_scoped_user_id, username, encrypted_access_token, authorized_at
       ) VALUES (
-        ${`ig-${randomUUID()}`}, ${appScopedId}, 'reconnected_account', ${encryptToken("new-token")},
+        ${TEST_ORGANIZATION_ID}, ${`ig-${randomUUID()}`}, ${appScopedId}, 'reconnected_account', ${encryptToken("new-token")},
         now() + interval '1 minute'
       ) RETURNING id
     `;
@@ -62,16 +63,16 @@ describe("callbacks Meta concorrentes", () => {
     const appScopedId = `app-${randomUUID()}`;
     const [account] = await sql<{ id: string }[]>`
       INSERT INTO instagram_accounts (
-        instagram_user_id, app_scoped_user_id, username, encrypted_access_token,
+        organization_id, instagram_user_id, app_scoped_user_id, username, encrypted_access_token,
         authorized_at, token_last_refreshed_at
       ) VALUES (
-        ${`ig-${randomUUID()}`}, ${appScopedId}, 'refreshed_account', ${encryptToken("refreshed-token")},
+        ${TEST_ORGANIZATION_ID}, ${`ig-${randomUUID()}`}, ${appScopedId}, 'refreshed_account', ${encryptToken("refreshed-token")},
         now() - interval '1 day', now()
       ) RETURNING id
     `;
     await sql`
-      INSERT INTO publication_jobs (campaign_id, instagram_account_id, scheduled_at)
-      VALUES (${campaignId}, ${account.id}, now() + interval '1 hour')
+      INSERT INTO publication_jobs (organization_id, campaign_id, instagram_account_id, scheduled_at)
+      VALUES (${TEST_ORGANIZATION_ID}, ${campaignId}, ${account.id}, now() + interval '1 hour')
     `;
     const request = signDeauthorization(appScopedId, Math.floor(Date.now() / 1000) - 5);
 
@@ -108,16 +109,16 @@ describe("callbacks Meta concorrentes", () => {
     const sql = getSqlClient();
     const appScopedId = `app-${randomUUID()}`;
     await sql`
-      INSERT INTO instagram_accounts (instagram_user_id, app_scoped_user_id, username, encrypted_access_token)
-      VALUES (${`ig-${randomUUID()}`}, ${appScopedId}, 'before_deletion', ${encryptToken("old-token")})
+      INSERT INTO instagram_accounts (organization_id, instagram_user_id, app_scoped_user_id, username, encrypted_access_token)
+      VALUES (${TEST_ORGANIZATION_ID}, ${`ig-${randomUUID()}`}, ${appScopedId}, 'before_deletion', ${encryptToken("old-token")})
     `;
     const issuedAt = Math.floor(Date.now() / 1000);
     const firstRequest = signDeauthorization(appScopedId, issuedAt);
     const first = await deleteDataBySignedRequest(firstRequest);
 
     const [reconnected] = await sql<{ id: string }[]>`
-      INSERT INTO instagram_accounts (instagram_user_id, app_scoped_user_id, username, encrypted_access_token)
-      VALUES (${`ig-${randomUUID()}`}, ${appScopedId}, 'after_reconnect', ${encryptToken("new-token")})
+      INSERT INTO instagram_accounts (organization_id, instagram_user_id, app_scoped_user_id, username, encrypted_access_token)
+      VALUES (${TEST_ORGANIZATION_ID}, ${`ig-${randomUUID()}`}, ${appScopedId}, 'after_reconnect', ${encryptToken("new-token")})
       RETURNING id
     `;
     const replay = await deleteDataBySignedRequest(firstRequest);
@@ -140,20 +141,20 @@ describe("callbacks Meta concorrentes", () => {
     const appScopedId = `app-${randomUUID()}`;
     const [account] = await sql<{ id: string }[]>`
       INSERT INTO instagram_accounts (
-        instagram_user_id, app_scoped_user_id, username, encrypted_access_token,
+        organization_id, instagram_user_id, app_scoped_user_id, username, encrypted_access_token,
         granted_scopes, biography, website
       ) VALUES (
-        ${`ig-${randomUUID()}`}, ${appScopedId}, 'com_dados', ${encryptToken("old-token")},
+        ${TEST_ORGANIZATION_ID}, ${`ig-${randomUUID()}`}, ${appScopedId}, 'com_dados', ${encryptToken("old-token")},
         ARRAY['instagram_business_manage_insights'], 'Bio da loja', 'https://loja.example'
       ) RETURNING id
     `;
     await sql`
-      INSERT INTO account_daily_metrics (instagram_account_id, day, followers_count)
-      VALUES (${account.id}, current_date, 100)
+      INSERT INTO account_daily_metrics (organization_id, instagram_account_id, day, followers_count)
+      VALUES (${TEST_ORGANIZATION_ID}, ${account.id}, current_date, 100)
     `;
     await sql`
-      INSERT INTO account_media (id, instagram_account_id, media_type, product_type, posted_at)
-      VALUES (${`media-${randomUUID()}`}, ${account.id}, 'IMAGE', 'FEED', now())
+      INSERT INTO account_media (id, organization_id, instagram_account_id, media_type, product_type, posted_at)
+      VALUES (${`media-${randomUUID()}`}, ${TEST_ORGANIZATION_ID}, ${account.id}, 'IMAGE', 'FEED', now())
     `;
     const request = signDeauthorization(appScopedId, Math.floor(Date.now() / 1000));
 

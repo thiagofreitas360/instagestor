@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { banAccountAction, disconnectAccountAction, refreshInsightsAction, unbanAccountAction, verifyAccountAction } from "@/app/actions";
 import { getSqlClient } from "@/db/client";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import {
   DefinitionList,
   EmptyState,
@@ -15,6 +16,7 @@ import {
   initials,
 } from "@/components/ui";
 import { loadAnalytics, resolvePeriod } from "@/server/analytics";
+import { requireAdmin } from "@/server/auth";
 
 type Account = {
   id: string;
@@ -63,6 +65,7 @@ function first(value?: string | string[]) {
 }
 
 export default async function AccountDetailPage({ params, searchParams }: PageProps) {
+  const user = await requireAdmin();
   const [{ id }, query] = await Promise.all([params, searchParams]);
   const sql = getSqlClient();
   const [[account], groups, [stats], jobs] = await Promise.all([
@@ -72,13 +75,13 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
         last_successful_api_call_at, last_error_at, last_error_code, last_error_message,
         publishing_limit_usage, publishing_limit_total, publishing_limit_checked_at, created_at,
         banned_at, ban_reason, granted_scopes, insights_synced_at
-      FROM instagram_accounts WHERE id = ${id} LIMIT 1
+      FROM instagram_accounts WHERE organization_id = ${user.organizationId} AND id = ${id} LIMIT 1
     `,
     sql<GroupRow[]>`
       SELECT group_row.id, group_row.name
       FROM account_groups group_row
-      JOIN account_group_members member ON member.group_id = group_row.id
-      WHERE member.instagram_account_id = ${id}
+      JOIN account_group_members member ON member.organization_id = group_row.organization_id AND member.group_id = group_row.id
+      WHERE group_row.organization_id = ${user.organizationId} AND member.instagram_account_id = ${id}
       ORDER BY group_row.name
     `,
     sql<Stats[]>`
@@ -86,21 +89,21 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
         count(*) FILTER (WHERE status = 'PUBLISHED')::int AS published,
         count(*) FILTER (WHERE status IN ('QUEUED', 'CLAIMED', 'CREATING_CONTAINER', 'WAITING_FOR_CONTAINER', 'READY_TO_PUBLISH', 'PUBLISHING', 'RETRY_WAIT'))::int AS pending,
         count(*) FILTER (WHERE status IN ('FAILED', 'RECONCILIATION_REQUIRED'))::int AS failed
-      FROM publication_jobs WHERE instagram_account_id = ${id}
+      FROM publication_jobs WHERE organization_id = ${user.organizationId} AND instagram_account_id = ${id}
     `,
     sql<Job[]>`
       SELECT job.id, job.campaign_id, campaign.name AS campaign_name, job.status,
         job.scheduled_at, job.published_at, job.last_error_message
       FROM publication_jobs job
-      JOIN campaigns campaign ON campaign.id = job.campaign_id
-      WHERE job.instagram_account_id = ${id}
+      JOIN campaigns campaign ON campaign.organization_id = job.organization_id AND campaign.id = job.campaign_id
+      WHERE job.organization_id = ${user.organizationId} AND job.instagram_account_id = ${id}
       ORDER BY job.updated_at DESC
       LIMIT 12
     `,
   ]);
   if (!account) notFound();
 
-  const analytics = await loadAnalytics({ accountIds: [account.id], period: resolvePeriod(30) });
+  const analytics = await loadAnalytics({ organizationId: user.organizationId, accountIds: [account.id], period: resolvePeriod(30) });
   const hasInsightsScope = account.granted_scopes?.includes("instagram_business_manage_insights") ?? false;
   const isBanned = account.status === "BANNED";
 
@@ -138,7 +141,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
             {canVerify ? (
               <form action={disconnectAccountAction}>
                 <input type="hidden" name="accountId" value={account.id} />
-                <button className="button button-quiet-danger" type="submit">Desconectar</button>
+                <ConfirmSubmitButton className="button button-quiet-danger" message={`Desconectar @${account.username}? Publicações pendentes dessa conta serão canceladas.`}>Desconectar</ConfirmSubmitButton>
               </form>
             ) : null}
           </>

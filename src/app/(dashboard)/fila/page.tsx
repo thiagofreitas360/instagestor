@@ -3,6 +3,7 @@ import { getSqlClient } from "@/db/client";
 import { MessageBanner, MetricCard, PageHeader, Panel, StatusBadge, formatDate } from "@/components/ui";
 import { QueueRow, QueueTable } from "@/components/queue-table";
 import { AutoRefresh } from "@/components/auto-refresh";
+import { requireAdmin } from "@/server/auth";
 
 type Counts = { queued: number; processing: number; retrying: number; attention: number };
 type Worker = { worker_id: string; last_seen_at: Date; active_jobs: number; version: string | null; is_online: boolean };
@@ -18,6 +19,7 @@ const statusFilters: Record<string, string[]> = {
 };
 
 export default async function QueuePage({ searchParams }: PageProps) {
+  const user = await requireAdmin();
   const query = await searchParams;
   const requestedStatus = first(query.status) ?? "todos";
   const selectedStatus = requestedStatus in statusFilters ? requestedStatus : "todos";
@@ -28,11 +30,12 @@ export default async function QueuePage({ searchParams }: PageProps) {
       SELECT job.id, job.campaign_id, campaign.name AS campaign_name,
         account.id AS account_id, account.username, job.status, job.scheduled_at,
         job.attempt_count, job.max_attempts, job.next_attempt_at, job.published_at,
-        job.finished_at, job.last_error_code, job.last_error_message, job.meta_media_id
+        job.finished_at, job.last_error_code, job.last_error_message, job.meta_media_id,
+        job.auto_comment_status, job.auto_comment_last_error_message
       FROM publication_jobs job
-      JOIN campaigns campaign ON campaign.id = job.campaign_id
-      JOIN instagram_accounts account ON account.id = job.instagram_account_id
-      WHERE job.status::text = ANY(${selectedStatuses}::text[])
+      JOIN campaigns campaign ON campaign.organization_id = job.organization_id AND campaign.id = job.campaign_id
+      JOIN instagram_accounts account ON account.organization_id = job.organization_id AND account.id = job.instagram_account_id
+      WHERE job.organization_id = ${user.organizationId} AND job.status::text = ANY(${selectedStatuses}::text[])
       ORDER BY
         CASE job.status WHEN 'RECONCILIATION_REQUIRED' THEN 0 WHEN 'PUBLISHING' THEN 1 WHEN 'READY_TO_PUBLISH' THEN 2 WHEN 'RETRY_WAIT' THEN 3 ELSE 4 END,
         COALESCE(job.next_attempt_at, job.scheduled_at)
@@ -44,7 +47,7 @@ export default async function QueuePage({ searchParams }: PageProps) {
         count(*) FILTER (WHERE status IN ('CLAIMED', 'CREATING_CONTAINER', 'WAITING_FOR_CONTAINER', 'READY_TO_PUBLISH', 'PUBLISHING'))::int AS processing,
         count(*) FILTER (WHERE status = 'RETRY_WAIT')::int AS retrying,
         count(*) FILTER (WHERE status = 'RECONCILIATION_REQUIRED')::int AS attention
-      FROM publication_jobs
+      FROM publication_jobs WHERE organization_id = ${user.organizationId}
     `,
     sql<Worker[]>`
       SELECT worker_id, last_seen_at, active_jobs, version,

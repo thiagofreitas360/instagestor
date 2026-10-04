@@ -13,8 +13,9 @@ function redirectToMedia(message: string, error = false) {
 
 export async function POST(request: Request) {
   const wantsJson = request.headers.get("accept")?.includes("application/json") ?? false;
+  let user: Awaited<ReturnType<typeof requireAdminApi>>;
   try {
-    await requireAdminApi();
+    user = await requireAdminApi();
   } catch (error) {
     if (error instanceof Response) return error;
     throw error;
@@ -36,7 +37,7 @@ export async function POST(request: Request) {
     if (!(file instanceof File)) throw new Error("Selecione um arquivo");
     const folderValue = String(formData.get("folderId") ?? "");
     const folderId = folderValue ? z.uuid().parse(folderValue) : undefined;
-    const mediaId = await storeMedia(file, folderId);
+    const mediaId = await storeMedia(file, user.organizationId, folderId);
     if (wantsJson) return Response.json({ id: mediaId }, { status: 201 });
     return redirectToMedia("Mídia enviada com sucesso.");
   } catch (error) {

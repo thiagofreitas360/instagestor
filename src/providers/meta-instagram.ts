@@ -5,7 +5,7 @@ import type {
   AccountDayInsights, AccountSnapshot, ContainerInput, InstagramProfile, InstagramProvider,
   MediaInsights, MediaProductType, MediaSummary,
 } from "./instagram";
-import { INSIGHTS_SCOPE } from "./instagram";
+import { COMMENTS_SCOPE, INSIGHTS_SCOPE } from "./instagram";
 
 type MetaErrorBody = { error?: { message?: string; type?: string; code?: number; error_subcode?: number; is_transient?: boolean } };
 
@@ -85,7 +85,7 @@ export class MetaInstagramProvider implements InstagramProvider {
       client_id: env.INSTAGRAM_APP_ID!,
       redirect_uri: env.INSTAGRAM_REDIRECT_URI!,
       response_type: "code",
-      scope: `instagram_business_basic,instagram_business_content_publish,${INSIGHTS_SCOPE}`,
+      scope: `instagram_business_basic,instagram_business_content_publish,${INSIGHTS_SCOPE},${COMMENTS_SCOPE}`,
       state,
       enable_fb_login: "0",
       force_reauth: "true",
@@ -334,6 +334,24 @@ export class MetaInstagramProvider implements InstagramProvider {
         "META_PUBLISH_RESPONSE_INVALID",
       );
     }
+    return value.id;
+  }
+
+  async createComment(mediaId: string, message: string, accessToken: string) {
+    let value: { id: string };
+    try {
+      value = await this.request<{ id: string }>(
+        `/${mediaId}/comments`,
+        { message, access_token: accessToken },
+        "POST",
+      );
+    } catch (error) {
+      if (error instanceof InstagramError && error.kind === "TRANSIENT") {
+        throw new InstagramError("Resultado do comentário é ambíguo", "AMBIGUOUS", "META_COMMENT_AMBIGUOUS");
+      }
+      throw error;
+    }
+    if (!value.id) throw new InstagramError("Resposta de comentário sem ID", "PERMANENT", "META_COMMENT_RESPONSE_INVALID");
     return value.id;
   }
 

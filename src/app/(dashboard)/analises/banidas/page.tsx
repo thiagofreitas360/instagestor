@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { EmptyState, formatDate, formatNumber, MetricCard, PageHeader, Panel, StatusBadge } from "@/components/ui";
 import { loadBanHistory } from "@/server/analytics";
+import { requireAdmin } from "@/server/auth";
 
 export default async function BannedAccountsPage() {
-  const history = await loadBanHistory();
+  const user = await requireAdmin();
+  const history = await loadBanHistory(user.organizationId);
   return (
     <div className="page-stack">
       <nav className="breadcrumbs" aria-label="Navegação estrutural">

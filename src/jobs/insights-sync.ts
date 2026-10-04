@@ -11,7 +11,13 @@ const DAY_MS = 86_400_000;
 const CLAIM_BATCH = 10;
 const FRESH_MEDIA_DAYS = 3;
 
-type ClaimedAccount = { id: string; instagram_user_id: string; encrypted_access_token: string; status: string };
+type ClaimedAccount = {
+  id: string;
+  organization_id: string;
+  instagram_user_id: string;
+  encrypted_access_token: string;
+  status: string;
+};
 type PendingMedia = { id: string; product_type: MediaProductType };
 
 // ponytail: dia = data UTC; a Meta fecha o dia no fuso dela. Trocar para settings.default_timezone se as bordas incomodarem.
@@ -36,21 +42,28 @@ async function claimAccounts() {
     )
     UPDATE instagram_accounts account SET insights_synced_at = now(), updated_at = now()
     FROM candidates WHERE account.id = candidates.id
-    RETURNING account.id, account.instagram_user_id, account.encrypted_access_token, account.status
+    RETURNING account.id, account.organization_id, account.instagram_user_id,
+      account.encrypted_access_token, account.status
   `;
 }
 
-async function upsertDailyMetrics(accountId: string, today: string, snapshot: AccountSnapshot, days: AccountDayInsights[]) {
+async function upsertDailyMetrics(
+  organizationId: string,
+  accountId: string,
+  today: string,
+  snapshot: AccountSnapshot,
+  days: AccountDayInsights[],
+) {
   const sql = getSqlClient();
   for (const day of days) {
     const isToday = day.day === today;
     await sql`
       INSERT INTO account_daily_metrics (
-        instagram_account_id, day, followers_count, follows_count, media_count, follower_gains, reach, views,
+        organization_id, instagram_account_id, day, followers_count, follows_count, media_count, follower_gains, reach, views,
         profile_views, accounts_engaged, total_interactions, likes, comments, shares, saves, replies,
         website_clicks, profile_links_taps, synced_at
       ) VALUES (
-        ${accountId}, ${day.day}::date,
+        ${organizationId}, ${accountId}, ${day.day}::date,
         ${isToday ? snapshot.followersCount : null}, ${isToday ? snapshot.followsCount : null}, ${isToday ? snapshot.mediaCount : null},
         ${day.followerGains}, ${day.reach}, ${day.views}, ${day.profileViews}, ${day.accountsEngaged}, ${day.totalInteractions},
         ${day.likes}, ${day.comments}, ${day.shares}, ${day.saves}, ${day.replies}, ${day.websiteClicks}, ${day.profileLinksTaps}, now()
@@ -68,11 +81,12 @@ async function upsertDailyMetrics(accountId: string, today: string, snapshot: Ac
   }
 }
 
-async function upsertMedia(accountId: string, items: MediaSummary[]) {
+async function upsertMedia(organizationId: string, accountId: string, items: MediaSummary[]) {
   if (!items.length) return;
   const sql = getSqlClient();
   const rows = items.map((item) => ({
     id: item.id,
+    organization_id: organizationId,
     instagram_account_id: accountId,
     media_type: item.mediaType,
     product_type: item.productType,
@@ -96,10 +110,10 @@ async function upsertMedia(accountId: string, items: MediaSummary[]) {
   `;
 }
 
-async function pendingMedia(accountId: string) {
+async function pendingMedia(organizationId: string, accountId: string) {
   return getSqlClient()<PendingMedia[]>`
     SELECT id, product_type FROM account_media
-    WHERE instagram_account_id = ${accountId} AND (
+    WHERE organization_id = ${organizationId} AND instagram_account_id = ${accountId} AND (
       (product_type = 'STORY' AND expires_at > now())
       OR (product_type <> 'STORY' AND posted_at > now() - ${FRESH_MEDIA_DAYS} * interval '1 day')
       OR (product_type <> 'STORY'
@@ -123,7 +137,7 @@ async function syncAccount(account: ClaimedAccount, now: Date) {
   const days = recentDays(now);
   const insights = await provider.getAccountInsights(igUserId, accessToken, days);
   calls += days.length + 1;
-  await upsertDailyMetrics(account.id, today, snapshot, insights);
+  await upsertDailyMetrics(account.organization_id, account.id, today, snapshot, insights);
 
   const since = new Date(now.getTime() - getEnv().INSIGHTS_MEDIA_WINDOW_DAYS * DAY_MS);
   const [recent, stories] = await Promise.all([
@@ -131,10 +145,10 @@ async function syncAccount(account: ClaimedAccount, now: Date) {
     provider.listLiveStories(igUserId, accessToken),
   ]);
   calls += 2;
-  await upsertMedia(account.id, [...recent, ...stories]);
+  await upsertMedia(account.organization_id, account.id, [...recent, ...stories]);
 
   let mediaSynced = 0;
-  for (const media of await pendingMedia(account.id)) {
+  for (const media of await pendingMedia(account.organization_id, account.id)) {
     try {
       const values = await provider.getMediaInsights(media.id, accessToken, media.product_type);
       calls++;
@@ -145,7 +159,7 @@ async function syncAccount(account: ClaimedAccount, now: Date) {
           reels_avg_watch_time_ms = ${values.reelsAvgWatchTimeMs}, reels_total_watch_time_ms = ${values.reelsTotalWatchTimeMs},
           story_taps_forward = ${values.storyTapsForward}, story_taps_back = ${values.storyTapsBack}, story_exits = ${values.storyExits},
           insights_synced_at = now(), updated_at = now()
-        WHERE id = ${media.id}
+        WHERE organization_id = ${account.organization_id} AND id = ${media.id}
       `;
       mediaSynced++;
     } catch (rawError) {
@@ -158,7 +172,9 @@ async function syncAccount(account: ClaimedAccount, now: Date) {
   await sql`
     UPDATE account_media SET published_job_id = job.id, updated_at = now()
     FROM publication_jobs job
-    WHERE job.meta_media_id = account_media.id AND account_media.instagram_account_id = ${account.id}
+    WHERE job.organization_id = ${account.organization_id}
+      AND account_media.organization_id = ${account.organization_id}
+      AND job.meta_media_id = account_media.id AND account_media.instagram_account_id = ${account.id}
       AND account_media.published_job_id IS NULL
   `;
   await sql`
@@ -166,7 +182,8 @@ async function syncAccount(account: ClaimedAccount, now: Date) {
       profile_picture_url = COALESCE(${snapshot.profilePictureUrl ?? null}, profile_picture_url),
       biography = ${snapshot.biography ?? null}, website = ${snapshot.website ?? null},
       insights_synced_at = now(), insights_error_code = NULL, last_successful_api_call_at = now(), updated_at = now()
-    WHERE id = ${account.id} AND encrypted_access_token = ${account.encrypted_access_token}
+    WHERE organization_id = ${account.organization_id}
+      AND id = ${account.id} AND encrypted_access_token = ${account.encrypted_access_token}
   `;
   return { calls, mediaSynced };
 }
@@ -189,6 +206,7 @@ export async function runInsightsSync(workerId: string) {
       // Só token inválido (401 ou código Meta 190) derruba a conta; outros AUTH (ex.: 403 de permissão) não afetam a publicação.
       if (error.kind === "AUTH" && (error.httpStatus === 401 || error.code.startsWith("META_190"))) {
         await markAccountUnavailableIfCurrent({
+          organizationId: account.organization_id,
           accountId: account.id,
           expectedEncryptedToken: account.encrypted_access_token,
           expectedStatus: account.status,
@@ -203,7 +221,8 @@ export async function runInsightsSync(workerId: string) {
           UPDATE instagram_accounts SET insights_error_code = ${error.code},
             insights_synced_at = now() + ${delayMs} * interval '1 millisecond',
             last_error_at = now(), last_error_code = ${error.code}, last_error_message = ${error.message}, updated_at = now()
-          WHERE id = ${account.id} AND encrypted_access_token = ${account.encrypted_access_token}
+          WHERE organization_id = ${account.organization_id}
+            AND id = ${account.id} AND encrypted_access_token = ${account.encrypted_access_token}
         `;
       }
       log("warn", "insights-sync", "account_failed", {

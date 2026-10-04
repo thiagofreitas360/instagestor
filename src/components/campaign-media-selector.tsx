@@ -13,8 +13,8 @@ type MediaOption = {
   folder_name: string | null;
 };
 
-export function CampaignMediaSelector({ media }: { media: MediaOption[] }) {
-  const [selected, setSelected] = useState<string[]>([]);
+export function CampaignMediaSelector({ media, initialMediaIds = [] }: { media: MediaOption[]; initialMediaIds?: string[] }) {
+  const [selected, setSelected] = useState<string[]>(() => initialMediaIds.filter((id) => media.some((asset) => asset.id === id)));
   const [folderId, setFolderId] = useState("");
   const folders = useMemo(() => Array.from(
     new Map(media.filter((asset) => asset.folder_id).map((asset) => [asset.folder_id!, asset.folder_name!])).entries(),

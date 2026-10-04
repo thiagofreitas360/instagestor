@@ -1,19 +1,40 @@
+import { randomUUID } from "node:crypto";
 import { getSqlClient } from "@/db/client";
 
 export type SeedAccount = { id: string; instagram_user_id: string; username: string };
+export const TEST_ORGANIZATION_ID = "00000000-0000-4000-8000-000000000001";
 
-export async function createUser(email = "admin@example.test") {
+export async function createOrganization(
+  id: string = randomUUID(),
+  name = `Organização ${id.slice(0, 8)}`,
+  slug = `organizacao-${id}`,
+) {
+  await getSqlClient()`
+    INSERT INTO organizations (id, name, slug) VALUES (${id}, ${name}, ${slug})
+    ON CONFLICT (id) DO NOTHING
+  `;
+  return id;
+}
+
+export async function createUser(email = "admin@example.test", organizationId = TEST_ORGANIZATION_ID) {
+  await createOrganization(organizationId, "InstaGestor Teste", `instagestor-teste-${organizationId}`);
   const [user] = await getSqlClient()<{ id: string }[]>`
     INSERT INTO users (email, password_hash)
     VALUES (${email}, 'integration-test-password-hash')
     RETURNING id
   `;
+  await getSqlClient()`
+    INSERT INTO organization_members (organization_id, user_id, role)
+    VALUES (${organizationId}, ${user.id}, 'OWNER')
+  `;
   return user.id;
 }
 
-export async function createAccounts(count: number, prefix = "account") {
+export async function createAccounts(count: number, prefix = "account", organizationId = TEST_ORGANIZATION_ID) {
+  await createOrganization(organizationId, "InstaGestor Teste", `instagestor-teste-${organizationId}`);
   const sql = getSqlClient();
   const rows = Array.from({ length: count }, (_, index) => ({
+    organization_id: organizationId,
     instagram_user_id: `${prefix}-instagram-${index.toString().padStart(3, "0")}`,
     username: `${prefix}_${index.toString().padStart(3, "0")}`,
     status: "CONNECTED",
@@ -29,12 +50,14 @@ export async function createCampaign(
   createdBy: string,
   status: "DRAFT" | "SCHEDULED" | "RUNNING" | "PAUSED" = "DRAFT",
   name = "Campanha de integração",
+  organizationId = TEST_ORGANIZATION_ID,
 ) {
+  await createOrganization(organizationId, "InstaGestor Teste", `instagestor-teste-${organizationId}`);
   const [campaign] = await getSqlClient()<{ id: string }[]>`
     INSERT INTO campaigns (
-      name, publication_type, status, delay_mode, delay_fixed_seconds, target_order, created_by
+      organization_id, name, publication_type, status, delay_mode, delay_fixed_seconds, target_order, created_by
     ) VALUES (
-      ${name}, 'FEED_IMAGE', ${status}::campaign_status, 'FIXED', 0, 'SELECTED', ${createdBy}
+      ${organizationId}, ${name}, 'FEED_IMAGE', ${status}::campaign_status, 'FIXED', 0, 'SELECTED', ${createdBy}
     )
     RETURNING id
   `;
@@ -51,10 +74,12 @@ export async function createJobs(
     lockedBy?: string | null;
     lockExpiresAt?: Date | null;
     fencingToken?: number;
+    organizationId?: string;
   } = {},
 ) {
   const sql = getSqlClient();
   const rows = accounts.map((account) => ({
+    organization_id: options.organizationId ?? TEST_ORGANIZATION_ID,
     campaign_id: campaignId,
     instagram_account_id: account.id,
     scheduled_at: (options.scheduledAt ?? new Date(Date.now() - 60_000)).toISOString(),

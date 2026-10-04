@@ -18,6 +18,8 @@ export type QueueRow = {
   last_error_code: string | null;
   last_error_message: string | null;
   meta_media_id: string | null;
+  auto_comment_status: string | null;
+  auto_comment_last_error_message: string | null;
 };
 
 export function QueueTable({ rows, history = false }: { rows: QueueRow[]; history?: boolean }) {
@@ -88,6 +90,11 @@ export function QueueTable({ rows, history = false }: { rows: QueueRow[]; histor
                 ) : (
                   <span className="muted">Sem ocorrências</span>
                 )}
+                {job.auto_comment_status ? (
+                  <small title={job.auto_comment_last_error_message ?? undefined}>
+                    Comentário: <StatusBadge status={job.auto_comment_status} />
+                  </small>
+                ) : null}
               </td>
               <td data-label="Ação" className="table-action-column">
                 {job.status === "FAILED" ? (

@@ -18,6 +18,7 @@ export async function createCampaign(input: {
   mediaIds: string[];
   shareToFeed?: boolean;
   actorUserId: string;
+  organizationId: string;
 }) {
   const name = input.name.trim();
   if (!name) throw new Error("Nome da campanha é obrigatório");
@@ -38,7 +39,8 @@ export async function createCampaign(input: {
       }>
     >`
       SELECT id, media_kind, size_bytes, width, height, duration_seconds FROM media_assets
-      WHERE id = ANY(${mediaIds}::uuid[]) AND processing_status = 'READY' AND deleted_at IS NULL
+      WHERE organization_id = ${input.organizationId}
+        AND id = ANY(${mediaIds}::uuid[]) AND processing_status = 'READY' AND deleted_at IS NULL
       FOR SHARE
     `;
     if (media.length !== mediaIds.length) throw new Error("Uma ou mais mídias não estão prontas");
@@ -56,29 +58,41 @@ export async function createCampaign(input: {
     );
 
     const [campaign] = await sql<{ id: string }[]>`
-      INSERT INTO campaigns (name, publication_type, caption, share_to_feed, created_by)
-      VALUES (${name}, ${input.publicationType}, ${input.caption?.trim() || null}, ${input.publicationType === "REEL" && (input.shareToFeed ?? false)}, ${input.actorUserId})
+      INSERT INTO campaigns (organization_id, name, publication_type, caption, share_to_feed, created_by)
+      VALUES (${input.organizationId}, ${name}, ${input.publicationType}, ${input.caption?.trim() || null}, ${input.publicationType === "REEL" && (input.shareToFeed ?? false)}, ${input.actorUserId})
       RETURNING id
     `;
-    const rows = orderedMedia.map((asset, position) => ({ campaign_id: campaign.id, media_asset_id: asset.id, position }));
+    const rows = orderedMedia.map((asset, position) => ({
+      organization_id: input.organizationId,
+      campaign_id: campaign.id,
+      media_asset_id: asset.id,
+      position,
+    }));
     await sql`INSERT INTO campaign_media ${sql(rows)}`;
     await sql`
-      INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id)
-      VALUES (${input.actorUserId}, 'CAMPAIGN_CREATED', 'campaign', ${campaign.id})
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id)
+      VALUES (${input.organizationId}, ${input.actorUserId}, 'CAMPAIGN_CREATED', 'campaign', ${campaign.id})
     `;
     return campaign.id;
   });
 }
 
-export async function resolveTargetIds(input: { accountIds?: string[]; groupIds?: string[]; all?: boolean }) {
+export async function resolveTargetIds(input: {
+  organizationId: string;
+  accountIds?: string[];
+  groupIds?: string[];
+  all?: boolean;
+}) {
   const accountIds = input.accountIds ?? [];
   const groupIds = input.groupIds ?? [];
   const rows = await getSqlClient()<Array<{ id: string; group_ids: string[] }>>`
     SELECT account.id,
       coalesce(array_agg(member.group_id::text) FILTER (WHERE member.group_id IS NOT NULL), '{}') AS group_ids
     FROM instagram_accounts account
-    LEFT JOIN account_group_members member ON member.instagram_account_id = account.id
-    WHERE account.status IN ('CONNECTED', 'TOKEN_EXPIRING')
+    LEFT JOIN account_group_members member ON member.organization_id = account.organization_id
+      AND member.instagram_account_id = account.id
+    WHERE account.organization_id = ${input.organizationId}
+      AND account.status IN ('CONNECTED', 'TOKEN_EXPIRING')
       AND (
         ${input.all === true}
         OR account.id = ANY(${accountIds}::uuid[])
@@ -98,16 +112,24 @@ export async function resolveTargetIds(input: { accountIds?: string[]; groupIds?
   return ordered;
 }
 
-export async function createGroup(name: string, description: string | undefined, actorUserId: string) {
+export async function createGroup(
+  name: string,
+  description: string | undefined,
+  actorUserId: string,
+  organizationId: string,
+  color = "#4f46e5",
+) {
   const normalized = name.trim();
+  if (!/^#[0-9a-fA-F]{6}$/.test(color)) throw new Error("Cor do grupo invalida");
   if (!normalized) throw new Error("Nome do grupo é obrigatório");
   return getSqlClient().begin(async (sql) => {
     const [group] = await sql<{ id: string }[]>`
-      INSERT INTO account_groups (name, description) VALUES (${normalized}, ${description?.trim() || null}) RETURNING id
+      INSERT INTO account_groups (organization_id, name, description, color)
+      VALUES (${organizationId}, ${normalized}, ${description?.trim() || null}, ${color}) RETURNING id
     `;
     await sql`
-      INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id)
-      VALUES (${actorUserId}, 'GROUP_CREATED', 'account_group', ${group.id})
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id)
+      VALUES (${organizationId}, ${actorUserId}, 'GROUP_CREATED', 'account_group', ${group.id})
     `;
     return group.id;
   });
@@ -118,6 +140,8 @@ export async function updateGroup(
   name: string,
   description: string | undefined,
   actorUserId: string,
+  organizationId: string,
+  color = "#4f46e5",
 ) {
   const normalized = name.trim();
   const normalizedDescription = description?.trim() || null;
@@ -127,39 +151,54 @@ export async function updateGroup(
     throw new Error("Descrição do grupo excede 500 caracteres");
   }
 
+  if (!/^#[0-9a-fA-F]{6}$/.test(color)) throw new Error("Cor do grupo invalida");
+
   await getSqlClient().begin(async (sql) => {
     const [group] = await sql<{ id: string }[]>`
-      SELECT id FROM account_groups WHERE id = ${groupId} FOR UPDATE
+      SELECT id FROM account_groups WHERE organization_id = ${organizationId} AND id = ${groupId} FOR UPDATE
     `;
     if (!group) throw new Error("Grupo não encontrado");
 
     await sql`
       UPDATE account_groups
-      SET name = ${normalized}, description = ${normalizedDescription}, updated_at = now()
-      WHERE id = ${groupId}
+      SET name = ${normalized}, description = ${normalizedDescription}, color = ${color}, updated_at = now()
+      WHERE organization_id = ${organizationId} AND id = ${groupId}
     `;
     await sql`
-      INSERT INTO audit_logs (actor_user_id, event_type, entity_type, entity_id, metadata_json)
-      VALUES (${actorUserId}, 'GROUP_UPDATED', 'account_group', ${groupId},
-        jsonb_build_object('fields', ARRAY['name', 'description']))
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id, metadata_json)
+      VALUES (${organizationId}, ${actorUserId}, 'GROUP_UPDATED', 'account_group', ${groupId},
+        jsonb_build_object('fields', ARRAY['name', 'description', 'color']))
     `;
   });
 }
 
-export async function replaceGroupMembers(groupId: string, accountIds: string[]) {
+export async function replaceGroupMembers(groupId: string, accountIds: string[], organizationId: string) {
   const uniqueIds = [...new Set(accountIds)];
   await getSqlClient().begin(async (sql) => {
-    const [group] = await sql<{ id: string }[]>`SELECT id FROM account_groups WHERE id = ${groupId} FOR UPDATE`;
+    const [group] = await sql<{ id: string }[]>`
+      SELECT id FROM account_groups WHERE organization_id = ${organizationId} AND id = ${groupId} FOR UPDATE
+    `;
     if (!group) throw new Error("Grupo não encontrado");
-    await sql`DELETE FROM account_group_members WHERE group_id = ${groupId}`;
+    if (uniqueIds.length) {
+      const [{ count }] = await sql<Array<{ count: number }>>`
+        SELECT count(*)::int AS count FROM instagram_accounts
+        WHERE organization_id = ${organizationId} AND id = ANY(${uniqueIds}::uuid[])
+      `;
+      if (count !== uniqueIds.length) throw new Error("Uma ou mais contas não pertencem à organização");
+    }
+    await sql`DELETE FROM account_group_members WHERE organization_id = ${organizationId} AND group_id = ${groupId}`;
     if (uniqueIds.length) {
       await sql`
-        INSERT INTO account_group_members ${sql(uniqueIds.map((id) => ({ group_id: groupId, instagram_account_id: id })))}
+        INSERT INTO account_group_members ${sql(uniqueIds.map((id) => ({
+          organization_id: organizationId,
+          group_id: groupId,
+          instagram_account_id: id,
+        })))}
       `;
     }
   });
 }
 
-export async function deleteGroup(groupId: string) {
-  await getSqlClient()`DELETE FROM account_groups WHERE id = ${groupId}`;
+export async function deleteGroup(groupId: string, organizationId: string) {
+  await getSqlClient()`DELETE FROM account_groups WHERE organization_id = ${organizationId} AND id = ${groupId}`;
 }

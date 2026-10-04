@@ -4,11 +4,11 @@ import { runInsightsSync } from "@/jobs/insights-sync";
 import { resetEnvForTests } from "@/lib/env";
 import { resetInstagramProviderForTests } from "@/providers";
 import { createFakeAccounts } from "@/server/accounts";
-import { createAccounts, createUser } from "./helpers";
+import { createAccounts, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 async function fakeAccounts(count: number) {
   const userId = await createUser();
-  await createFakeAccounts(count, userId);
+  await createFakeAccounts(count, userId, TEST_ORGANIZATION_ID);
   return getSqlClient()<Array<{ id: string; instagram_user_id: string }>>`
     SELECT id, instagram_user_id FROM instagram_accounts ORDER BY username
   `;
@@ -20,12 +20,12 @@ describe("runInsightsSync", () => {
     const [account] = await fakeAccounts(1);
     const userId = (await sql<Array<{ id: string }>>`SELECT id FROM users LIMIT 1`)[0].id;
     const [campaign] = await sql<Array<{ id: string }>>`
-      INSERT INTO campaigns (name, publication_type, status, delay_mode, delay_fixed_seconds, target_order, created_by)
-      VALUES ('c', 'REEL', 'COMPLETED', 'FIXED', 0, 'SELECTED', ${userId}) RETURNING id
+      INSERT INTO campaigns (organization_id, name, publication_type, status, delay_mode, delay_fixed_seconds, target_order, created_by)
+      VALUES (${TEST_ORGANIZATION_ID}, 'c', 'REEL', 'COMPLETED', 'FIXED', 0, 'SELECTED', ${userId}) RETURNING id
     `;
     const [job] = await sql<Array<{ id: string }>>`
-      INSERT INTO publication_jobs (campaign_id, instagram_account_id, scheduled_at, status, meta_media_id, published_at)
-      VALUES (${campaign.id}, ${account.id}, now(), 'PUBLISHED', ${`fake_media_${account.instagram_user_id}_0`}, now())
+      INSERT INTO publication_jobs (organization_id, campaign_id, instagram_account_id, scheduled_at, status, meta_media_id, published_at)
+      VALUES (${TEST_ORGANIZATION_ID}, ${campaign.id}, ${account.id}, now(), 'PUBLISHED', ${`fake_media_${account.instagram_user_id}_0`}, now())
       RETURNING id
     `;
 
@@ -75,8 +75,8 @@ describe("runInsightsSync", () => {
     const sql = getSqlClient();
     const [account] = await fakeAccounts(1);
     await sql`
-      INSERT INTO account_daily_metrics (instagram_account_id, day, followers_count, reach)
-      VALUES (${account.id}, current_date - 10, 111, 222)
+      INSERT INTO account_daily_metrics (organization_id, instagram_account_id, day, followers_count, reach)
+      VALUES (${TEST_ORGANIZATION_ID}, ${account.id}, current_date - 10, 111, 222)
     `;
     await runInsightsSync("w");
     await sql`UPDATE instagram_accounts SET insights_synced_at = now() - interval '2 hours'`;

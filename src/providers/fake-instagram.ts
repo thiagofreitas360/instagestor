@@ -71,6 +71,12 @@ export class FakeInstagramProvider implements InstagramProvider {
     return `fake_media_${createHash("sha256").update(containerId).digest("hex").slice(0, 20)}`;
   }
 
+  async createComment(mediaId: string, message: string, accessToken: string) {
+    void accessToken;
+    this.fail("request");
+    return `fake_comment_${createHash("sha256").update(`${mediaId}:${message}`).digest("hex").slice(0, 20)}`;
+  }
+
   async getPublishingLimit(accountId: string, accessToken: string) {
     void accountId;
     void accessToken;

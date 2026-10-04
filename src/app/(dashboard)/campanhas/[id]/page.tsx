@@ -24,6 +24,7 @@ import {
 } from "@/components/ui";
 import { CampaignRhythmFields, CampaignTargetsSelector } from "@/components/campaign-schedule-fields";
 import { getPrivateMediaUrl } from "@/providers/storage";
+import { requireAdmin } from "@/server/auth";
 
 type Campaign = {
   id: string;
@@ -85,22 +86,23 @@ function localInputValue(timezone: string) {
 }
 
 export default async function CampaignDetailPage({ params, searchParams }: PageProps) {
+  const user = await requireAdmin();
   const [{ id }, query] = await Promise.all([params, searchParams]);
   const sql = getSqlClient();
   const [[campaign], media, accounts, groups, targets, jobs, [stats], [setting]] = await Promise.all([
-    sql<Campaign[]>`SELECT * FROM campaigns WHERE id = ${id} LIMIT 1`,
+    sql<Campaign[]>`SELECT * FROM campaigns WHERE organization_id = ${user.organizationId} AND id = ${id} AND origin = 'MANUAL' LIMIT 1`,
     sql<Media[]>`
       SELECT asset.id, asset.original_filename, asset.media_kind, asset.size_bytes,
         asset.width, asset.height
       FROM campaign_media relation
-      JOIN media_assets asset ON asset.id = relation.media_asset_id
-      WHERE relation.campaign_id = ${id}
+      JOIN media_assets asset ON asset.organization_id = relation.organization_id AND asset.id = relation.media_asset_id
+      WHERE relation.organization_id = ${user.organizationId} AND relation.campaign_id = ${id}
       ORDER BY relation.position
     `,
     sql<Account[]>`
       SELECT id, username, display_name, status
       FROM instagram_accounts
-      WHERE status IN ('CONNECTED', 'TOKEN_EXPIRING')
+      WHERE organization_id = ${user.organizationId} AND status IN ('CONNECTED', 'TOKEN_EXPIRING')
       ORDER BY username
     `,
     sql<Group[]>`
@@ -109,15 +111,17 @@ export default async function CampaignDetailPage({ params, searchParams }: PageP
         coalesce(array_agg(grouped_account.id::text)
           FILTER (WHERE grouped_account.status IN ('CONNECTED', 'TOKEN_EXPIRING')), '{}') AS account_ids
       FROM account_groups group_row
-      LEFT JOIN account_group_members member ON member.group_id = group_row.id
-      LEFT JOIN instagram_accounts grouped_account ON grouped_account.id = member.instagram_account_id
+      LEFT JOIN account_group_members member ON member.organization_id = group_row.organization_id AND member.group_id = group_row.id
+      LEFT JOIN instagram_accounts grouped_account ON grouped_account.organization_id = group_row.organization_id
+        AND grouped_account.id = member.instagram_account_id
+      WHERE group_row.organization_id = ${user.organizationId}
       GROUP BY group_row.id ORDER BY group_row.name
     `,
     sql<Target[]>`
       SELECT account.id, account.username, account.display_name, target.position, target.scheduled_at
       FROM campaign_targets target
-      JOIN instagram_accounts account ON account.id = target.instagram_account_id
-      WHERE target.campaign_id = ${id}
+      JOIN instagram_accounts account ON account.organization_id = target.organization_id AND account.id = target.instagram_account_id
+      WHERE target.organization_id = ${user.organizationId} AND target.campaign_id = ${id}
       ORDER BY target.position
     `,
     sql<Job[]>`
@@ -125,12 +129,13 @@ export default async function CampaignDetailPage({ params, searchParams }: PageP
         job.published_at, job.attempt_count, job.max_attempts, job.meta_media_id, job.last_error_message
         , job.publication_position, publication_media.original_filename AS media_name
       FROM publication_jobs job
-      JOIN instagram_accounts account ON account.id = job.instagram_account_id
+      JOIN instagram_accounts account ON account.organization_id = job.organization_id AND account.id = job.instagram_account_id
       LEFT JOIN campaign_media publication_relation
-        ON publication_relation.campaign_id = job.campaign_id
+        ON publication_relation.organization_id = job.organization_id AND publication_relation.campaign_id = job.campaign_id
         AND publication_relation.position = job.publication_position
-      LEFT JOIN media_assets publication_media ON publication_media.id = publication_relation.media_asset_id
-      WHERE job.campaign_id = ${id}
+      LEFT JOIN media_assets publication_media ON publication_media.organization_id = job.organization_id
+        AND publication_media.id = publication_relation.media_asset_id
+      WHERE job.organization_id = ${user.organizationId} AND job.campaign_id = ${id}
       ORDER BY job.scheduled_at
       LIMIT 100
     `,
@@ -140,14 +145,17 @@ export default async function CampaignDetailPage({ params, searchParams }: PageP
         count(*) FILTER (WHERE status IN ('QUEUED', 'CLAIMED', 'CREATING_CONTAINER', 'WAITING_FOR_CONTAINER', 'READY_TO_PUBLISH', 'PUBLISHING', 'RETRY_WAIT'))::int AS pending,
         count(*) FILTER (WHERE status IN ('FAILED', 'RECONCILIATION_REQUIRED'))::int AS failed,
         count(*) FILTER (WHERE status = 'CANCELLED')::int AS cancelled
-      FROM publication_jobs WHERE campaign_id = ${id}
+      FROM publication_jobs WHERE organization_id = ${user.organizationId} AND campaign_id = ${id}
     `,
-    sql<Setting[]>`SELECT default_timezone, default_delay_mode, default_delay_min, default_delay_max FROM settings WHERE id = true`,
+    sql<Setting[]>`
+      SELECT default_timezone, default_delay_mode, default_delay_min, default_delay_max
+      FROM settings WHERE organization_id = ${user.organizationId}
+    `,
   ]);
   if (!campaign) notFound();
   const mediaWithUrls = media.map((asset) => ({
     ...asset,
-    previewUrl: getPrivateMediaUrl(asset.id),
+    previewUrl: getPrivateMediaUrl(asset.id, user.organizationId),
   }));
 
   const timezone = campaign.start_at ? campaign.timezone : setting?.default_timezone || campaign.timezone || "America/Sao_Paulo";

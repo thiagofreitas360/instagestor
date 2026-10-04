@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { closeDatabase, getSqlClient } from "../src/db/client";
 import { getEnv } from "../src/lib/env";
 import { log } from "../src/lib/logger";
-import { claimJob, processClaimedJob, recoverStaleJobs } from "../src/jobs/queue";
+import { claimAutoComment, claimJob, processClaimedAutoComment, processClaimedJob, recoverStaleJobs } from "../src/jobs/queue";
 import { refreshExpiringTokens } from "../src/jobs/token-maintenance";
 import { runInsightsSync } from "../src/jobs/insights-sync";
+import { reconcileActiveLoops } from "../src/server/automation";
 
 const workerId = `${process.env.HOSTNAME ?? "worker"}-${process.pid}-${randomUUID().slice(0, 8)}`;
 let stopping = false;
@@ -47,16 +48,30 @@ function createMaintenanceTask(event: string, operation: () => Promise<unknown>)
 }
 
 async function runner() {
+  let preferComment = false;
   while (!stopping) {
     try {
-      const job = await claimJob(workerId);
-      if (!job) {
+      const comment = preferComment ? await claimAutoComment(workerId) : null;
+      const job = comment ? null : await claimJob(workerId);
+      const fallbackComment = !comment && !job ? await claimAutoComment(workerId) : null;
+      const claimedComment = comment ?? fallbackComment;
+      if (!job && !claimedComment) {
         await wait(getEnv().WORKER_POLL_MS);
+        continue;
+      }
+      preferComment = !preferComment;
+      if (claimedComment) {
+        activeJobs++;
+        try {
+          await processClaimedAutoComment(claimedComment, workerId);
+        } finally {
+          activeJobs--;
+        }
         continue;
       }
       activeJobs++;
       try {
-        await processClaimedJob(job, workerId);
+        await processClaimedJob(job!, workerId);
       } finally {
         activeJobs--;
       }
@@ -73,10 +88,19 @@ async function runner() {
 async function main() {
   const env = getEnv();
   const recovered = await recoverStaleJobs();
-  log("info", "worker", "started", { worker_id: workerId, concurrency: env.WORKER_CONCURRENCY, recovered });
+  const reconciledLoops = await reconcileActiveLoops();
+  log("info", "worker", "started", {
+    worker_id: workerId,
+    concurrency: env.WORKER_CONCURRENCY,
+    recovered,
+    reconciled_loops: reconciledLoops,
+  });
   const heartbeatTask = createMaintenanceTask("heartbeat_failed", heartbeat);
   const tokenTask = createMaintenanceTask("token_maintenance_failed", () => refreshExpiringTokens(workerId));
-  const recoveryTask = createMaintenanceTask("recovery_failed", recoverStaleJobs);
+  const recoveryTask = createMaintenanceTask("recovery_failed", async () => ({
+    recovered: await recoverStaleJobs(),
+    reconciledLoops: await reconcileActiveLoops(),
+  }));
   const insightsTask = createMaintenanceTask("insights_sync_failed", () => runInsightsSync(workerId));
   await heartbeatTask.trigger();
   const heartbeatTimer = setInterval(() => void heartbeatTask.trigger(), 10_000);

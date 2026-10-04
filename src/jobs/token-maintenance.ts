@@ -7,7 +7,7 @@ import { markAccountUnavailableIfCurrent } from "./account-availability";
 
 export async function refreshExpiringTokens(workerId: string) {
   const accounts = await getSqlClient()<
-    Array<{ id: string; encrypted_access_token: string; token_expires_at: Date; status: string }>
+    Array<{ id: string; organization_id: string; encrypted_access_token: string; token_expires_at: Date; status: string }>
   >`
     WITH candidates AS (
       SELECT id FROM instagram_accounts
@@ -20,7 +20,8 @@ export async function refreshExpiringTokens(workerId: string) {
     )
     UPDATE instagram_accounts account SET token_last_checked_at = now(), updated_at = now()
     FROM candidates WHERE account.id = candidates.id
-    RETURNING account.id, account.encrypted_access_token, account.token_expires_at, account.status
+    RETURNING account.id, account.organization_id, account.encrypted_access_token,
+      account.token_expires_at, account.status
   `;
   for (const account of accounts) {
     try {
@@ -30,14 +31,15 @@ export async function refreshExpiringTokens(workerId: string) {
           UPDATE instagram_accounts SET encrypted_access_token = ${encryptToken(refreshed.accessToken)},
             token_expires_at = now() + ${refreshed.expiresIn} * interval '1 second', status = 'CONNECTED',
             token_last_refreshed_at = now(), token_last_checked_at = now(), updated_at = now()
-          WHERE id = ${account.id} AND encrypted_access_token = ${account.encrypted_access_token}
+          WHERE organization_id = ${account.organization_id}
+            AND id = ${account.id} AND encrypted_access_token = ${account.encrypted_access_token}
             AND status = ${account.status}
           RETURNING id
         `;
         if (!rows.length) return false;
         await sql`
-          INSERT INTO audit_logs (event_type, entity_type, entity_id)
-          VALUES ('TOKEN_REFRESHED', 'instagram_account', ${account.id})
+          INSERT INTO audit_logs (organization_id, event_type, entity_type, entity_id)
+          VALUES (${account.organization_id}, 'TOKEN_REFRESHED', 'instagram_account', ${account.id})
         `;
         return true;
       });
@@ -50,6 +52,7 @@ export async function refreshExpiringTokens(workerId: string) {
       let updated: boolean;
       if (error.kind === "AUTH") {
         updated = await markAccountUnavailableIfCurrent({
+          organizationId: account.organization_id,
           accountId: account.id,
           expectedEncryptedToken: account.encrypted_access_token,
           expectedStatus: account.status,
@@ -63,7 +66,8 @@ export async function refreshExpiringTokens(workerId: string) {
           UPDATE instagram_accounts SET status = 'TOKEN_EXPIRING',
             token_last_checked_at = now(), last_error_at = now(), last_error_code = ${error.code},
             last_error_message = ${error.message}, updated_at = now()
-          WHERE id = ${account.id} AND encrypted_access_token = ${account.encrypted_access_token}
+          WHERE organization_id = ${account.organization_id}
+            AND id = ${account.id} AND encrypted_access_token = ${account.encrypted_access_token}
             AND status = ${account.status}
           RETURNING id
         `;

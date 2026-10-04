@@ -17,6 +17,13 @@ async function cleanTestDatabase() {
       account_group_members,
       account_groups,
       audit_logs,
+      loop_account_state,
+      loop_accounts,
+      loop_media,
+      loops,
+      schedule_accounts,
+      schedule_media,
+      schedules,
       campaign_media,
       campaign_targets,
       publication_jobs,
@@ -28,6 +35,8 @@ async function cleanTestDatabase() {
       oauth_states,
       settings,
       worker_heartbeats,
+      organization_members,
+      organizations,
       users
     RESTART IDENTITY CASCADE
   `;

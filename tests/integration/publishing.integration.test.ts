@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { getSqlClient } from "@/db/client";
-import { claimJob, processClaimedJob } from "@/jobs/queue";
+import { claimAutoComment, claimJob, processClaimedAutoComment, processClaimedJob } from "@/jobs/queue";
 import { encryptToken } from "@/lib/crypto";
 import { resetEnvForTests } from "@/lib/env";
 import { resetInstagramProviderForTests } from "@/providers";
-import { createUser } from "./helpers";
+import { createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 type Scenario = "success" | "http_500" | "http_501" | "ambiguous_publish" | "token_expired";
 
-async function publishingFixture(scenario: Scenario, quota?: { usage: number; total: number }) {
+async function publishingFixture(scenario: Scenario, quota?: { usage: number; total: number }, autoComment?: string) {
   process.env.FAKE_PROVIDER_SCENARIO = scenario;
   resetEnvForTests();
   resetInstagramProviderForTests();
@@ -16,10 +16,10 @@ async function publishingFixture(scenario: Scenario, quota?: { usage: number; to
   const actorId = await createUser(`${scenario}-${crypto.randomUUID()}@example.test`);
   const [account] = await sql<{ id: string }[]>`
     INSERT INTO instagram_accounts (
-      instagram_user_id, app_scoped_user_id, username, status, encrypted_access_token,
+      organization_id, instagram_user_id, app_scoped_user_id, username, status, encrypted_access_token,
       token_expires_at, publishing_limit_usage, publishing_limit_total, publishing_limit_checked_at
     ) VALUES (
-      ${`ig-${crypto.randomUUID()}`}, ${`app-${crypto.randomUUID()}`}, ${`account_${crypto.randomUUID().slice(0, 8)}`},
+      ${TEST_ORGANIZATION_ID}, ${`ig-${crypto.randomUUID()}`}, ${`app-${crypto.randomUUID()}`}, ${`account_${crypto.randomUUID().slice(0, 8)}`},
       'CONNECTED', ${encryptToken("fake-token:integration:integration_account")}, now() + interval '60 days',
       ${quota?.usage ?? null}, ${quota?.total ?? null}, ${quota ? new Date().toISOString() : null}
     )
@@ -27,25 +27,31 @@ async function publishingFixture(scenario: Scenario, quota?: { usage: number; to
   `;
   const [asset] = await sql<{ id: string }[]>`
     INSERT INTO media_assets (
-      original_filename, storage_provider, storage_key, mime_type, media_kind, size_bytes,
+      organization_id, original_filename, storage_provider, storage_key, mime_type, media_kind, size_bytes,
       checksum_sha256, width, height, processing_status
     ) VALUES (
-      'integration.jpg', 'LOCAL', ${`media/${crypto.randomUUID()}`}, 'image/jpeg', 'IMAGE', 1024,
+      ${TEST_ORGANIZATION_ID}, 'integration.jpg', 'LOCAL', ${`media/${crypto.randomUUID()}`}, 'image/jpeg', 'IMAGE', 1024,
       ${"a".repeat(64)}, 1080, 1080, 'READY'
     )
     RETURNING id
   `;
   const [campaign] = await sql<{ id: string }[]>`
-    INSERT INTO campaigns (name, publication_type, status, delay_mode, delay_fixed_seconds, target_order, created_by)
-    VALUES ('Publicação integrada', 'FEED_IMAGE', 'SCHEDULED', 'FIXED', 0, 'SELECTED', ${actorId})
+    INSERT INTO campaigns (organization_id, name, publication_type, status, delay_mode, delay_fixed_seconds, target_order, created_by)
+    VALUES (${TEST_ORGANIZATION_ID}, 'Publicação integrada', 'FEED_IMAGE', 'SCHEDULED', 'FIXED', 0, 'SELECTED', ${actorId})
     RETURNING id
   `;
   await sql`
-    INSERT INTO campaign_media (campaign_id, media_asset_id, position) VALUES (${campaign.id}, ${asset.id}, 0)
+    INSERT INTO campaign_media (organization_id, campaign_id, media_asset_id, position)
+    VALUES (${TEST_ORGANIZATION_ID}, ${campaign.id}, ${asset.id}, 0)
   `;
   const [job] = await sql<{ id: string }[]>`
-    INSERT INTO publication_jobs (campaign_id, instagram_account_id, scheduled_at)
-    VALUES (${campaign.id}, ${account.id}, now() - interval '1 minute')
+    INSERT INTO publication_jobs (
+      organization_id, campaign_id, instagram_account_id, scheduled_at,
+      auto_comment_text, auto_comment_delay_minutes
+    ) VALUES (
+      ${TEST_ORGANIZATION_ID}, ${campaign.id}, ${account.id}, now() - interval '1 minute',
+      ${autoComment ?? null}, 0
+    )
     RETURNING id
   `;
   return { accountId: account.id, campaignId: campaign.id, jobId: job.id };
@@ -94,6 +100,30 @@ describe("pipeline persistente de publicação", () => {
     expect(result).toMatchObject({ status: "PUBLISHED", attempt_count: 0, campaign_status: "COMPLETED", quota_usage: 4 });
     expect(result.meta_media_id).toMatch(/^fake_media_/);
     expect(await claimJob("publisher-extra")).toBeNull();
+  });
+
+  it("publica o auto-comentário depois da mídia e registra o resultado", async () => {
+    const fixture = await publishingFixture("success", undefined, "Link na bio");
+    const first = await claimJob("comment-publisher-a");
+    await processClaimedJob(first!, "comment-publisher-a");
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await getSqlClient()`UPDATE publication_jobs SET next_attempt_at = now() WHERE id = ${fixture.jobId}`;
+    const second = await claimJob("comment-publisher-b");
+    await processClaimedJob(second!, "comment-publisher-b");
+
+    const claimedComment = await claimAutoComment("comment-worker");
+    expect(claimedComment?.id).toBe(fixture.jobId);
+    await processClaimedAutoComment(claimedComment!, "comment-worker");
+    const [job] = await getSqlClient()<Array<{
+      auto_comment_status: string;
+      meta_comment_id: string | null;
+      auto_comment_attempt_count: number;
+    }>>`
+      SELECT auto_comment_status, meta_comment_id, auto_comment_attempt_count
+      FROM publication_jobs WHERE id = ${fixture.jobId}
+    `;
+    expect(job).toMatchObject({ auto_comment_status: "PUBLISHED", auto_comment_attempt_count: 0 });
+    expect(job.meta_comment_id).toMatch(/^fake_comment_/);
   });
 
   it("nunca repete automaticamente um publish de resultado ambíguo", async () => {

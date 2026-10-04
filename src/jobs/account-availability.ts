@@ -2,6 +2,7 @@ import { getSqlClient } from "@/db/client";
 import type { InstagramErrorKind } from "@/lib/errors";
 
 type MarkAccountUnavailableInput = {
+  organizationId: string;
   accountId: string;
   expectedEncryptedToken: string;
   expectedStatus: string;
@@ -23,7 +24,7 @@ export async function markAccountUnavailableIfCurrent(input: MarkAccountUnavaila
       UPDATE instagram_accounts SET
         status = ${input.nextStatus}, token_last_checked_at = now(), last_error_at = now(),
         last_error_code = ${input.errorCode}, last_error_message = ${input.errorMessage}, updated_at = now()
-      WHERE id = ${input.accountId}
+      WHERE organization_id = ${input.organizationId} AND id = ${input.accountId}
         AND encrypted_access_token = ${input.expectedEncryptedToken}
         AND status = ${input.expectedStatus}
       RETURNING id
@@ -39,7 +40,7 @@ export async function markAccountUnavailableIfCurrent(input: MarkAccountUnavaila
           last_error_message = ${input.errorMessage}, finished_at = now(),
           locked_at = NULL, locked_by = NULL, lock_expires_at = NULL,
           fencing_token = fencing_token + 1, updated_at = now()
-        WHERE instagram_account_id = ${input.accountId}
+        WHERE organization_id = ${input.organizationId} AND instagram_account_id = ${input.accountId}
           AND status IN ('QUEUED', 'RETRY_WAIT', 'CLAIMED', 'CREATING_CONTAINER', 'WAITING_FOR_CONTAINER', 'READY_TO_PUBLISH')
         RETURNING campaign_id
       ), ambiguous_jobs AS (
@@ -49,7 +50,7 @@ export async function markAccountUnavailableIfCurrent(input: MarkAccountUnavaila
           last_error_message = 'A conta ficou indisponível durante media_publish; reconciliação manual obrigatória',
           finished_at = now(), locked_at = NULL, locked_by = NULL, lock_expires_at = NULL,
           fencing_token = fencing_token + 1, updated_at = now()
-        WHERE instagram_account_id = ${input.accountId} AND status = 'PUBLISHING'
+        WHERE organization_id = ${input.organizationId} AND instagram_account_id = ${input.accountId} AND status = 'PUBLISHING'
         RETURNING campaign_id
       ), affected AS (
         SELECT campaign_id FROM failed_jobs
@@ -67,7 +68,7 @@ export async function markAccountUnavailableIfCurrent(input: MarkAccountUnavaila
           count(*) FILTER (WHERE job.status = 'PUBLISHED') AS published,
           count(*) FILTER (WHERE job.status IN ('FAILED', 'RECONCILIATION_REQUIRED')) AS failed
         FROM publication_jobs job
-        WHERE job.campaign_id = ANY(${campaignIds}::uuid[])
+        WHERE job.organization_id = ${input.organizationId} AND job.campaign_id = ANY(${campaignIds}::uuid[])
         GROUP BY job.campaign_id
       )
       UPDATE campaigns SET
@@ -78,8 +79,9 @@ export async function markAccountUnavailableIfCurrent(input: MarkAccountUnavaila
         END,
         updated_at = now()
       FROM totals
-      WHERE campaigns.id = totals.campaign_id AND totals.pending = 0
-        AND campaigns.status IN ('SCHEDULED', 'RUNNING', 'PAUSED')
+      WHERE campaigns.organization_id = ${input.organizationId}
+        AND campaigns.id = totals.campaign_id AND totals.pending = 0
+        AND campaigns.origin <> 'LOOP' AND campaigns.status IN ('SCHEDULED', 'RUNNING', 'PAUSED')
       `;
     }
     return true;

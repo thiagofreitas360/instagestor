@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getSqlClient } from "@/db/client";
 import { PageHeader, Panel } from "@/components/ui";
 import { QueueRow, QueueTable } from "@/components/queue-table";
+import { requireAdmin } from "@/server/auth";
 
 function first(value?: string | string[]) { return Array.isArray(value) ? value[0] : value; }
 
@@ -13,6 +14,7 @@ const statusFilters: Record<string, string[]> = {
 };
 
 export default async function QueueHistoryPage({ searchParams }: { searchParams: Promise<{ status?: string | string[] }> }) {
+  const user = await requireAdmin();
   const query = await searchParams;
   const requestedStatus = first(query.status) ?? "todos";
   const selectedStatus = requestedStatus in statusFilters ? requestedStatus : "todos";
@@ -21,11 +23,12 @@ export default async function QueueHistoryPage({ searchParams }: { searchParams:
     SELECT job.id, job.campaign_id, campaign.name AS campaign_name,
       account.id AS account_id, account.username, job.status, job.scheduled_at,
       job.attempt_count, job.max_attempts, job.next_attempt_at, job.published_at,
-      job.finished_at, job.last_error_code, job.last_error_message, job.meta_media_id
+      job.finished_at, job.last_error_code, job.last_error_message, job.meta_media_id,
+      job.auto_comment_status, job.auto_comment_last_error_message
     FROM publication_jobs job
-    JOIN campaigns campaign ON campaign.id = job.campaign_id
-    JOIN instagram_accounts account ON account.id = job.instagram_account_id
-    WHERE job.status::text = ANY(${selectedStatuses}::text[])
+    JOIN campaigns campaign ON campaign.organization_id = job.organization_id AND campaign.id = job.campaign_id
+    JOIN instagram_accounts account ON account.organization_id = job.organization_id AND account.id = job.instagram_account_id
+    WHERE job.organization_id = ${user.organizationId} AND job.status::text = ANY(${selectedStatuses}::text[])
     ORDER BY COALESCE(job.finished_at, job.published_at, job.updated_at) DESC
     LIMIT 300
   `;
