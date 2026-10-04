@@ -154,11 +154,13 @@ export function EmptyState({
   description,
   href,
   actionLabel,
+  action,
 }: {
   title: string;
   description: string;
   href?: string;
   actionLabel?: string;
+  action?: React.ReactNode;
 }) {
   return (
     <div className="empty-state">
@@ -171,7 +173,7 @@ export function EmptyState({
         <Link className="button button-secondary" href={href}>
           {actionLabel}
         </Link>
-      ) : null}
+      ) : action}
     </div>
   );
 }

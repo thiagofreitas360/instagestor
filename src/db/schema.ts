@@ -794,6 +794,7 @@ export const oauthStates = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     nonceHash: text("nonce_hash").notNull().unique(),
+    targetInstagramAccountId: uuid("target_instagram_account_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     usedAt: timestamp("used_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -804,6 +805,11 @@ export const oauthStates = pgTable(
       columns: [table.organizationId, table.initiatedBy],
       foreignColumns: [organizationMembers.organizationId, organizationMembers.userId],
       name: "oauth_states_organization_member_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.organizationId, table.targetInstagramAccountId],
+      foreignColumns: [instagramAccounts.organizationId, instagramAccounts.id],
+      name: "oauth_states_target_account_fk",
     }).onDelete("cascade"),
   ],
 );

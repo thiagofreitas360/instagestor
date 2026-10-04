@@ -47,12 +47,23 @@ beforeEach(() => {
 
 describe("OAuth state", () => {
   it("persiste somente o hash SHA-256 de um nonce forte", async () => {
+    mocks.sqlResponses.push([{ id: "state-row" }]);
     const state = await createOauthState("org-1", "user-1");
     const persistedHash = mocks.sqlCalls[0][3];
 
     expect(state).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(persistedHash).toMatch(/^[a-f0-9]{64}$/);
     expect(persistedHash).not.toBe(state);
+  });
+
+  it("grava a conta alvo da reconexão e recusa conta fora da organização", async () => {
+    mocks.sqlResponses.push([{ id: "state-row" }], []);
+
+    await createOauthState("org-1", "user-1", "account-7");
+    expect(mocks.sqlCalls[0]).toContain("account-7");
+    expect((mocks.sqlCalls[0][0] as TemplateStringsArray).join(" ")).toContain("organization_id =");
+
+    await expect(createOauthState("org-1", "user-1", "account-de-outro-cliente")).rejects.toThrow("não encontrada");
   });
 
   it("consome state uma única vez e rejeita ausente, expirado ou reutilizado", async () => {
@@ -96,6 +107,31 @@ describe("reconexão OAuth", () => {
     expect(upsertSql).toContain("ON CONFLICT (instagram_user_id) DO UPDATE");
     expect(mocks.sqlCalls[2]).not.toContain("token-meta-secreto");
     expect(mocks.audit).toHaveBeenCalledWith("org-1", "user-1", "ACCOUNT_RECONNECTED", "instagram_account", "account-7");
+  });
+
+  it("recusa reconexão quando a Meta devolve outra conta, sem gravar token", async () => {
+    mocks.sqlResponses.push(
+      [{ id: "state-row", organization_id: "org-1", initiated_by: "user-1", target_instagram_account_id: "account-7" }],
+      [{ id: "account-9", organization_id: "org-1" }],
+    );
+    mocks.exchangeAuthorizationCode.mockResolvedValue({ appScopedUserId: "a9", accessToken: "t9", expiresIn: 1 });
+    mocks.getProfile.mockResolvedValue({ id: "ig-9", username: "outra_conta" });
+
+    await expect(connectFromAuthorizationCode("code", "state")).rejects.toMatchObject({ result: "wrong_reconnect_account" });
+    expect(mocks.sqlCalls).toHaveLength(2);
+    expect(mocks.audit).not.toHaveBeenCalled();
+  });
+
+  it("recusa conta já vinculada a outra organização", async () => {
+    mocks.sqlResponses.push(
+      [{ id: "state-row", organization_id: "org-1", initiated_by: "user-1", target_instagram_account_id: null }],
+      [{ id: "account-x", organization_id: "org-2" }],
+    );
+    mocks.exchangeAuthorizationCode.mockResolvedValue({ appScopedUserId: "ax", accessToken: "tx", expiresIn: 1 });
+    mocks.getProfile.mockResolvedValue({ id: "ig-x", username: "de_outro" });
+
+    await expect(connectFromAuthorizationCode("code", "state")).rejects.toMatchObject({ result: "account_already_claimed" });
+    expect(mocks.sqlCalls).toHaveLength(2);
   });
 
   it("audita conexão inicial quando o upsert insere a conta", async () => {

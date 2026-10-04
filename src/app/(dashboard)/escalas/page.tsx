@@ -9,6 +9,7 @@ import { EmptyState, formatDate, MessageBanner, PageHeader, Panel, StatusBadge }
 import { getSqlClient } from "@/db/client";
 import { getPrivateMediaUrl } from "@/providers/storage";
 import { requireAdmin } from "@/server/auth";
+import { getEnv } from "@/lib/env";
 
 type Account = { id: string; username: string; display_name: string | null; status: string };
 type Group = { id: string; name: string; member_count: number; account_ids: string[] };
@@ -41,6 +42,7 @@ const weekdays = [{ value: 0, label: "Dom" }, { value: 1, label: "Seg" }, { valu
 
 export default async function SchedulesPage({ searchParams }: PageProps) {
   const user = await requireAdmin();
+  const commentsAvailable = getEnv().INSTAGRAM_PROVIDER !== "meta";
   const query = await searchParams;
   const [accounts, groups, media, schedules, [settings]] = await Promise.all([
     getSqlClient()<Account[]>`SELECT id, username, display_name, status FROM instagram_accounts WHERE organization_id = ${user.organizationId} AND status IN ('CONNECTED', 'TOKEN_EXPIRING') ORDER BY username`,
@@ -138,7 +140,7 @@ export default async function SchedulesPage({ searchParams }: PageProps) {
             <fieldset className="choice-grid"><legend>Dias da semana</legend>{weekdays.map((day) => <label className="choice-card" key={day.value}><input name="daysOfWeek" type="checkbox" value={day.value} defaultChecked={editing ? editing.days_of_week.includes(day.value) : true} /><span><strong>{day.label}</strong></span></label>)}</fieldset>
             <label>Legenda padrão<textarea name="defaultCaption" rows={4} maxLength={2200} placeholder="Opcional" defaultValue={editing?.default_caption} /></label>
             <div className="form-grid form-grid-four">
-              <label className="field-span-two">Auto-comentário<textarea name="autoCommentText" rows={3} maxLength={2200} placeholder="Ex.: Link na bio — deixe vazio para desativar" defaultValue={editing?.auto_comment_text} /></label>
+              <label className="field-span-two">Auto-comentário<textarea name="autoCommentText" rows={3} maxLength={2200} disabled={!commentsAvailable} placeholder={commentsAvailable ? "Ex.: Link na bio — deixe vazio para desativar" : "Indisponível: a permissão de comentários não é solicitada nesta versão"} defaultValue={commentsAvailable ? editing?.auto_comment_text : ""} /></label>
               <label>Esperar após publicar (min)<input name="autoCommentDelayMinutes" type="number" min={0} max={10080} defaultValue={editing?.auto_comment_delay_minutes ?? 5} required /></label>
             </div>
             <fieldset className="form-section"><legend>Contas e grupos</legend><CampaignTargetsSelector key={editing?.id ?? "new"} accounts={accounts} groups={groups} initialAccountIds={editing?.account_ids ?? []} /></fieldset>

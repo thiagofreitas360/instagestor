@@ -3,6 +3,7 @@ import { createFakeAccountsAction, disconnectAccountAction } from "@/app/actions
 import { getSqlClient } from "@/db/client";
 import { EmptyState, formatDate, MessageBanner, PageHeader, Panel, StatusBadge, initials } from "@/components/ui";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { InstagramConnectButton } from "@/components/instagram-connect-button";
 import { requireAdmin } from "@/server/auth";
 
 type AccountRow = {
@@ -92,9 +93,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         title="Contas do Instagram"
         description={`${connected} de ${accounts.length} contas disponíveis para publicação${needsAttention ? ` · ${needsAttention} precisam de atenção` : ""}.`}
         actions={
-          <Link className="button button-primary" href="/api/instagram/oauth/start">
-            Conectar Instagram
-          </Link>
+          <InstagramConnectButton>Conectar Instagram</InstagramConnectButton>
         }
       />
       <MessageBanner error={first(params.erro)} success={first(params.ok)} />
@@ -221,7 +220,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                       </td>
                       <td data-label="Ação" className="table-action-column">
                         <div className="table-actions">
-                          {account.status === "REAUTH_REQUIRED" ? <Link className="button button-small button-primary" href="/api/instagram/oauth/start">Reconectar</Link> : null}
+                          {account.status === "REAUTH_REQUIRED" ? <InstagramConnectButton accountId={account.id} className="button button-small button-primary">Reconectar</InstagramConnectButton> : null}
                           <Link className="button button-small button-secondary" href={`/contas/${account.id}`}>Detalhes</Link>
                           {!(["DISCONNECTED", "DISABLED", "BANNED"].includes(account.status)) ? (
                             <form action={disconnectAccountAction}>
@@ -241,8 +240,9 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           <EmptyState
             title={accounts.length ? "Nenhuma conta neste filtro" : "Nenhuma conta conectada"}
             description={accounts.length ? "Escolha outro filtro para ver as demais contas." : "Conecte uma conta profissional do Instagram para começar a publicar."}
-            href={accounts.length ? "/contas" : "/api/instagram/oauth/start"}
-            actionLabel={accounts.length ? "Mostrar todas" : "Conectar Instagram"}
+            href={accounts.length ? "/contas" : undefined}
+            actionLabel={accounts.length ? "Mostrar todas" : undefined}
+            action={<InstagramConnectButton className="button button-secondary">Conectar Instagram</InstagramConnectButton>}
           />
         )}
       </Panel>

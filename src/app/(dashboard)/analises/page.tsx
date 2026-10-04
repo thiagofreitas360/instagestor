@@ -9,6 +9,7 @@ import {
   type MediaOrder, type MediaRow, type PeriodDays, type RankingOrder, type Totals,
 } from "@/server/analytics";
 import { requireAdmin } from "@/server/auth";
+import { InstagramConnectButton } from "@/components/instagram-connect-button";
 
 type Query = Record<string, string | string[] | undefined>;
 type PageProps = { searchParams: Promise<Query> };
@@ -198,7 +199,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
           <ul className="tag-list">
             {data.missingScope.map((account) => <li key={account.id}>@{account.username}</li>)}
           </ul>
-          <Link className="button button-secondary" href="/api/instagram/oauth/start">Reconectar via Meta</Link>
+          <InstagramConnectButton className="button button-secondary">Reconectar via Meta</InstagramConnectButton>
         </Panel>
       ) : null}
       {data.syncErrors.length ? (
@@ -231,8 +232,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
         <EmptyState
           title="Nenhuma conta com análises"
           description="Conecte (ou reconecte) contas concedendo a permissão de insights. O worker sincroniza automaticamente em até 1 minuto."
-          href="/api/instagram/oauth/start"
-          actionLabel="Conectar Instagram"
+          action={<InstagramConnectButton className="button button-secondary">Conectar Instagram</InstagramConnectButton>}
         />
       ) : (
         <>

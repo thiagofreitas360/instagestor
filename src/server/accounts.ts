@@ -3,6 +3,7 @@ import type { TransactionSql } from "postgres";
 import { getSqlClient } from "@/db/client";
 import { decryptToken, encryptToken, randomSecret, sha256 } from "@/lib/crypto";
 import { asInstagramError } from "@/lib/errors";
+import { OauthFlowError } from "@/lib/oauth-result";
 import { getEnv } from "@/lib/env";
 import { getInstagramProvider, MetaInstagramProvider } from "@/providers";
 import { COMMENTS_SCOPE, INSIGHTS_SCOPE } from "@/providers/instagram";
@@ -221,23 +222,31 @@ export async function verifyAccount(accountId: string, organizationId: string) {
   }
 }
 
-export async function createOauthState(organizationId: string, actorUserId: string) {
+export async function createOauthState(organizationId: string, actorUserId: string, targetAccountId?: string) {
   if (getEnv().INSTAGRAM_PROVIDER !== "meta") throw new Error("OAuth real requer INSTAGRAM_PROVIDER=meta");
   const state = randomSecret(32);
-  await getSqlClient()`
-    INSERT INTO oauth_states (organization_id, initiated_by, nonce_hash, expires_at)
-    VALUES (${organizationId}, ${actorUserId}, ${sha256(state)}, now() + interval '10 minutes')
+  const target = targetAccountId ?? null;
+  const created = await getSqlClient()`
+    INSERT INTO oauth_states (organization_id, initiated_by, nonce_hash, expires_at, target_instagram_account_id)
+    SELECT ${organizationId}, ${actorUserId}, ${sha256(state)}, now() + interval '10 minutes', ${target}::uuid
+    WHERE ${target}::uuid IS NULL OR EXISTS (
+      SELECT 1 FROM instagram_accounts WHERE organization_id = ${organizationId} AND id = ${target}::uuid
+    )
+    RETURNING id
   `;
+  if (!created.length) throw new Error("Conta para reconexão não encontrada");
   return state;
 }
 
 export async function consumeOauthState(state: string) {
-  const [valid] = await getSqlClient()<{ id: string; organization_id: string; initiated_by: string }[]>`
+  const [valid] = await getSqlClient()<
+    { id: string; organization_id: string; initiated_by: string; target_instagram_account_id: string | null }[]
+  >`
     UPDATE oauth_states SET used_at = now()
     WHERE nonce_hash = ${sha256(state)} AND used_at IS NULL AND expires_at > now()
-    RETURNING id, organization_id, initiated_by
+    RETURNING id, organization_id, initiated_by, target_instagram_account_id
   `;
-  if (!valid) throw new Error("OAuth state inválido, expirado ou já utilizado");
+  if (!valid) throw new OauthFlowError("state_expired", "OAuth state inválido, expirado ou já utilizado");
   return valid;
 }
 
@@ -252,7 +261,10 @@ export async function connectFromAuthorizationCode(code: string, state: string) 
       SELECT id, organization_id FROM instagram_accounts WHERE instagram_user_id = ${profile.id} FOR UPDATE
     `;
     if (existing && existing.organization_id !== oauth.organization_id) {
-      throw new Error("Esta conta do Instagram já pertence a outra organização");
+      throw new OauthFlowError("account_already_claimed");
+    }
+    if (oauth.target_instagram_account_id && existing?.id !== oauth.target_instagram_account_id) {
+      throw new OauthFlowError("wrong_reconnect_account");
     }
     const [saved] = await sql<{ id: string; inserted: boolean }[]>`
       INSERT INTO instagram_accounts (

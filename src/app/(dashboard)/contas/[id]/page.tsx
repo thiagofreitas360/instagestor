@@ -17,6 +17,7 @@ import {
 } from "@/components/ui";
 import { loadAnalytics, resolvePeriod } from "@/server/analytics";
 import { requireAdmin } from "@/server/auth";
+import { InstagramConnectButton } from "@/components/instagram-connect-button";
 
 type Account = {
   id: string;
@@ -125,7 +126,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
         actions={
           <>
             {mustReconnect ? (
-              <Link className="button button-primary" href="/api/instagram/oauth/start">Reconectar via Meta</Link>
+              <InstagramConnectButton accountId={account.id}>Reconectar via Meta</InstagramConnectButton>
             ) : (
               <form action={verifyAccountAction}>
                 <input type="hidden" name="accountId" value={account.id} />

@@ -1,0 +1,2 @@
+ALTER TABLE "oauth_states" ADD COLUMN "target_instagram_account_id" uuid;--> statement-breakpoint
+ALTER TABLE "oauth_states" ADD CONSTRAINT "oauth_states_target_account_fk" FOREIGN KEY ("organization_id","target_instagram_account_id") REFERENCES "public"."instagram_accounts"("organization_id","id") ON DELETE cascade ON UPDATE no action;

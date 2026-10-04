@@ -2,7 +2,7 @@
 
 ## Modelo de ameaça e escopo
 
-O Instagestor é um sistema interno, single-organization e inicialmente single-admin. Os ativos críticos são tokens das contas Instagram, App Secret, credenciais do administrador, chave de criptografia, sessão, mídia e capacidade de publicar. As fronteiras externas são browser, callbacks da Meta, PostgreSQL e storage S3.
+O Instagestor é multi-tenant: cada empresa cliente é uma organização isolada, com usuários próprios e várias contas Instagram. Toda consulta a dados de cliente filtra por `organization_id`, e uma mesma conta Instagram (`instagram_user_id` único) não pode pertencer a duas organizações. Os ativos críticos são tokens das contas Instagram, App Secret, credenciais dos usuários, chave de criptografia, sessão, mídia e capacidade de publicar. As fronteiras externas são browser, callbacks da Meta, PostgreSQL e storage S3.
 
 O sistema não armazena senha do Instagram, cookies da rede social nem usa automação de browser. A integração real deve usar somente a API oficial da Meta.
 
@@ -24,6 +24,10 @@ O cookie é assinado, não criptografado, e contém somente identificador, role 
 
 - `state` aleatório, armazenado apenas como SHA-256, expira em dez minutos e é single-use;
 - callback consome o state atomicamente antes de trocar o código;
+- reconexão grava `target_instagram_account_id` no state (validado contra a organização) e recusa com `wrong_reconnect_account` se a Meta devolver outra conta;
+- conta já vinculada a outro cliente é recusada com `account_already_claimed`, sem revelar o outro cliente;
+- o fluxo roda em popup: o callback redireciona para `/instagram/oauth/complete?result=<código>` (lista fechada de códigos, nunca código OAuth/token/mensagem da Meta), que envia `postMessage` somente para o origin de `APP_URL`; a janela principal valida `origin`, `source` e o schema da mensagem e recarrega a lista do servidor. Sem `window.opener`, o fluxo cai para a mesma aba;
+- nenhum header COOP é enviado, para não cortar `window.opener` (o Instagram responde `Cross-Origin-Opener-Policy: unsafe-none`);
 - callbacks de desautorização e exclusão verificam `signed_request` com HMAC-SHA256 e comparação constante;
 - códigos OAuth, tokens e App Secret não devem aparecer em logs nem no frontend.
 

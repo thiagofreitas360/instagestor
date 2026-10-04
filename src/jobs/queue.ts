@@ -454,7 +454,7 @@ export async function processClaimedAutoComment(job: ClaimedAutoComment, workerI
       throw new InstagramError("Conta indisponível para comentar", "AUTH", "ACCOUNT_UNAVAILABLE");
     }
     if (getEnv().INSTAGRAM_PROVIDER === "meta" && !details.granted_scopes?.includes(COMMENTS_SCOPE)) {
-      throw new InstagramError("Reconecte a conta para autorizar comentários", "VALIDATION", "COMMENTS_SCOPE_MISSING");
+      throw new InstagramError("Auto-comentário indisponível: a permissão de comentários não é solicitada nesta versão", "VALIDATION", "COMMENTS_SCOPE_MISSING");
     }
     accountState = { encryptedAccessToken: details.encrypted_access_token, status: details.account_status };
     const result = await acquireSlots(job.campaign_id, job.instagram_account_id, async () => {

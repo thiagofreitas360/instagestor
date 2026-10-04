@@ -30,7 +30,7 @@ describe("OAuth com escopo de insights", () => {
   it("pede manage_insights e devolve as permissões concedidas", async () => {
     const url = new URL(new MetaInstagramProvider().authorizationUrl("state"));
     expect(url.searchParams.get("scope")).toBe(
-      "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights,instagram_business_manage_comments",
+      "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights",
     );
 
     fetchMock(

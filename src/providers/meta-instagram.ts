@@ -5,7 +5,7 @@ import type {
   AccountDayInsights, AccountSnapshot, ContainerInput, InstagramProfile, InstagramProvider,
   MediaInsights, MediaProductType, MediaSummary,
 } from "./instagram";
-import { COMMENTS_SCOPE, INSIGHTS_SCOPE } from "./instagram";
+import { INSIGHTS_SCOPE } from "./instagram";
 
 type MetaErrorBody = { error?: { message?: string; type?: string; code?: number; error_subcode?: number; is_transient?: boolean } };
 
@@ -85,7 +85,8 @@ export class MetaInstagramProvider implements InstagramProvider {
       client_id: env.INSTAGRAM_APP_ID!,
       redirect_uri: env.INSTAGRAM_REDIRECT_URI!,
       response_type: "code",
-      scope: `instagram_business_basic,instagram_business_content_publish,${INSIGHTS_SCOPE},${COMMENTS_SCOPE}`,
+      // Comentários ficam fora do primeiro App Review; auto-comentário falha com COMMENTS_SCOPE_MISSING.
+      scope: `instagram_business_basic,instagram_business_content_publish,${INSIGHTS_SCOPE}`,
       state,
       enable_fb_login: "0",
       force_reauth: "true",
