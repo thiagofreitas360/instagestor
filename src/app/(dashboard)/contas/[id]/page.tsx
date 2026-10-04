@@ -17,6 +17,7 @@ import {
 } from "@/components/ui";
 import { loadAnalytics, resolvePeriod } from "@/server/analytics";
 import { requireAdmin } from "@/server/auth";
+import { listMetaApps } from "@/server/meta-apps";
 import { InstagramConnectButton } from "@/components/instagram-connect-button";
 
 type Account = {
@@ -69,7 +70,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
   const user = await requireAdmin();
   const [{ id }, query] = await Promise.all([params, searchParams]);
   const sql = getSqlClient();
-  const [[account], groups, [stats], jobs] = await Promise.all([
+  const [[account], groups, [stats], jobs, apps] = await Promise.all([
     sql<Account[]>`
       SELECT id, instagram_user_id, username, display_name, profile_picture_url, account_type, status,
         token_expires_at, token_last_refreshed_at, token_last_checked_at,
@@ -101,6 +102,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
       ORDER BY job.updated_at DESC
       LIMIT 12
     `,
+    listMetaApps(user.organizationId),
   ]);
   if (!account) notFound();
 
@@ -126,7 +128,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
         actions={
           <>
             {mustReconnect ? (
-              <InstagramConnectButton accountId={account.id}>Reconectar via Meta</InstagramConnectButton>
+              <InstagramConnectButton accountId={account.id} apps={apps}>Reconectar via Meta</InstagramConnectButton>
             ) : (
               <form action={verifyAccountAction}>
                 <input type="hidden" name="accountId" value={account.id} />

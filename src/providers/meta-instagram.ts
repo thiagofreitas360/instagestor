@@ -79,26 +79,29 @@ export class MetaInstagramProvider implements InstagramProvider {
     return `https://graph.instagram.com/${getEnv().META_API_VERSION}`;
   }
 
-  authorizationUrl(state: string) {
+  // Sem force_reauth: a Meta reaproveita o Instagram já logado no navegador e vai direto ao consentimento.
+  authorizationUrl(state: string, appId = getEnv().INSTAGRAM_APP_ID!) {
     const env = getEnv();
     const query = new URLSearchParams({
-      client_id: env.INSTAGRAM_APP_ID!,
+      client_id: appId,
       redirect_uri: env.INSTAGRAM_REDIRECT_URI!,
       response_type: "code",
       // Comentários ficam fora do primeiro App Review; auto-comentário falha com COMMENTS_SCOPE_MISSING.
       scope: `instagram_business_basic,instagram_business_content_publish,${INSIGHTS_SCOPE}`,
       state,
       enable_fb_login: "0",
-      force_reauth: "true",
     });
     return `https://www.instagram.com/oauth/authorize?${query}`;
   }
 
-  async exchangeAuthorizationCode(code: string) {
+  async exchangeAuthorizationCode(
+    code: string,
+    app = { appId: getEnv().INSTAGRAM_APP_ID!, appSecret: getEnv().INSTAGRAM_APP_SECRET! },
+  ) {
     const env = getEnv();
     const body = new FormData();
-    body.set("client_id", env.INSTAGRAM_APP_ID!);
-    body.set("client_secret", env.INSTAGRAM_APP_SECRET!);
+    body.set("client_id", app.appId);
+    body.set("client_secret", app.appSecret);
     body.set("grant_type", "authorization_code");
     body.set("redirect_uri", env.INSTAGRAM_REDIRECT_URI!);
     body.set("code", code);
@@ -126,7 +129,7 @@ export class MetaInstagramProvider implements InstagramProvider {
     const exchangeUrl = new URL("https://graph.instagram.com/access_token");
     exchangeUrl.search = new URLSearchParams({
       grant_type: "ig_exchange_token",
-      client_secret: env.INSTAGRAM_APP_SECRET!,
+      client_secret: app.appSecret,
       access_token: shortLived.access_token,
     }).toString();
     const longLived = await this.fetchJson<{ access_token: string; expires_in: number }>(exchangeUrl.toString(), { method: "GET" });

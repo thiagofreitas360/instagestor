@@ -32,6 +32,7 @@ async function cleanTestDatabase() {
       login_attempts,
       media_assets,
       media_folders,
+      meta_apps,
       oauth_states,
       settings,
       worker_heartbeats,

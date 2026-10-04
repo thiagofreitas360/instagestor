@@ -8,6 +8,7 @@ import { getSqlClient } from "@/db/client";
 import { authenticate, clearSession, clientAddressFromHeaders, requireAdmin, setSession } from "@/server/auth";
 import { banAccount, createFakeAccounts, disconnectAccount, requestInsightsRefresh, unbanAccount, verifyAccount } from "@/server/accounts";
 import { createCampaign, createGroup, deleteGroup, replaceGroupMembers, resolveTargetIds, updateGroup } from "@/server/campaigns";
+import { deleteMetaApp, saveMetaApp } from "@/server/meta-apps";
 import { createLoop, createSchedule, deleteLoop, deleteSchedule, setLoopStatus, updateLoop, updateSchedule } from "@/server/automation";
 import {
   createMediaFolder,
@@ -212,6 +213,44 @@ export async function deleteGroupAction(formData: FormData) {
   } catch (error) {
     back("/grupos", error);
   }
+}
+
+const metaAppSecret = z.string({ error: "Informe o Instagram App Secret" }).trim()
+  .regex(/^\S{16,128}$/, "Instagram App Secret inválido");
+
+export async function saveMetaAppAction(formData: FormData) {
+  const user = await requireAdmin();
+  const editing = Boolean(formData.get("id"));
+  const parsed = z.object({
+    id: id.optional(),
+    name: z.string().trim().min(1, "Dê um nome ao app").max(60, "Use no máximo 60 caracteres no nome"),
+    appId: z.string().trim().regex(/^\d{10,20}$/, "Instagram App ID deve ter só números (10 a 20 dígitos)"),
+    appSecret: editing ? metaAppSecret.optional() : metaAppSecret,
+  }).safeParse({
+    id: formData.get("id") || undefined,
+    name: formData.get("name"),
+    appId: formData.get("appId"),
+    appSecret: String(formData.get("appSecret") ?? "").trim() || undefined,
+  });
+  if (!parsed.success) back("/meta-apps", new Error(parsed.error.issues[0]?.message ?? "Dados do Meta App inválidos"));
+  try {
+    await saveMetaApp(user.organizationId, user.id, parsed.data);
+    revalidatePath("/meta-apps");
+  } catch (error) {
+    back("/meta-apps", error);
+  }
+  redirect(`/meta-apps?ok=${encodeURIComponent(editing ? "App atualizado" : "App criado")}`);
+}
+
+export async function deleteMetaAppAction(formData: FormData) {
+  const user = await requireAdmin();
+  try {
+    await deleteMetaApp(user.organizationId, user.id, id.parse(formData.get("id")));
+    revalidatePath("/meta-apps");
+  } catch (error) {
+    back("/meta-apps", error);
+  }
+  redirect(`/meta-apps?ok=${encodeURIComponent("App removido")}`);
 }
 
 export async function deleteMediaAction(formData: FormData) {

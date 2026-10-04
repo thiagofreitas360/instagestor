@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { encryptToken } from "@/lib/crypto";
 import { resetEnvForTests } from "@/lib/env";
 
 const mocks = vi.hoisted(() => ({
@@ -101,7 +102,7 @@ describe("reconexão OAuth", () => {
 
     await expect(connectFromAuthorizationCode("authorization-code", "oauth-state")).resolves.toBe("account-7");
 
-    expect(mocks.exchangeAuthorizationCode).toHaveBeenCalledWith("authorization-code");
+    expect(mocks.exchangeAuthorizationCode).toHaveBeenCalledWith("authorization-code", undefined);
     expect(mocks.getProfile).toHaveBeenCalledWith("token-meta-secreto");
     const upsertSql = (mocks.sqlCalls[2][0] as TemplateStringsArray).join(" ");
     expect(upsertSql).toContain("ON CONFLICT (instagram_user_id) DO UPDATE");
@@ -150,5 +151,24 @@ describe("reconexão OAuth", () => {
     await connectFromAuthorizationCode("code-new", "state-new");
 
     expect(mocks.audit).toHaveBeenCalledWith("org-1", "user-1", "ACCOUNT_CONNECTED", "instagram_account", "account-new");
+  });
+
+  it("troca o código com o Meta App do state e grava o vínculo na conta", async () => {
+    mocks.sqlResponses.push(
+      [{ id: "state-row", organization_id: "org-1", initiated_by: "user-1", meta_app_id: "meta-app-1" }],
+      [{ app_id: "1234567890123", encrypted_app_secret: encryptToken("secret-do-cliente") }],
+      [],
+      [{ id: "account-new", inserted: true }],
+    );
+    mocks.exchangeAuthorizationCode.mockResolvedValue({ appScopedUserId: "a1", accessToken: "t1", expiresIn: 1 });
+    mocks.getProfile.mockResolvedValue({ id: "ig-1", username: "via_app" });
+
+    await connectFromAuthorizationCode("code", "state");
+
+    expect(mocks.sqlCalls[1]).toContain("org-1");
+    expect(mocks.exchangeAuthorizationCode).toHaveBeenCalledWith("code", {
+      appId: "1234567890123", appSecret: "secret-do-cliente",
+    });
+    expect(mocks.sqlCalls[3]).toContain("meta-app-1");
   });
 });

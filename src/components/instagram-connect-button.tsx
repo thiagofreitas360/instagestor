@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   OAUTH_MESSAGE_TYPE,
@@ -9,21 +10,31 @@ import {
   parseOauthMessage,
   type OauthResult,
 } from "@/lib/oauth-result";
+import type { MetaAppOption } from "@/server/meta-apps";
 
-type Status = "waiting" | "blocked" | "closed" | OauthResult;
+type Status = "picking" | "waiting" | "blocked" | "closed" | OauthResult;
 
-const STATUS_COPY: Record<"waiting" | "blocked" | "closed", string> = {
+const STATUS_COPY: Record<"picking" | "waiting" | "blocked" | "closed", string> = {
+  picking: "Escolha o app em que a conta foi adicionada como testadora. Deixe o Instagram logado neste navegador.",
   waiting: "Conclua a autorização na janela oficial da Meta. Esta tela será atualizada automaticamente.",
   blocked: "O navegador bloqueou a janela de autorização. Continue nesta aba ou permita pop-ups para este site.",
   closed: "A janela da Meta foi fechada. Se você concluiu a autorização, a lista já foi atualizada.",
 };
 
+function oauthStartUrl(accountId?: string, app?: string) {
+  const query = new URLSearchParams({ ...(accountId ? { account: accountId } : {}), ...(app ? { app } : {}) }).toString();
+  return `/api/instagram/oauth/start${query ? `?${query}` : ""}`;
+}
+
+/** Sem apps do cliente usa o app central; com um, conecta direto; com dois ou mais, pergunta qual. */
 export function InstagramConnectButton({
   accountId,
+  apps = [],
   className = "button button-primary",
   children,
 }: {
   accountId?: string;
+  apps?: MetaAppOption[];
   className?: string;
   children: React.ReactNode;
 }) {
@@ -31,7 +42,8 @@ export function InstagramConnectButton({
   const dialog = useRef<HTMLDialogElement>(null);
   const popup = useRef<Window | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
-  const startUrl = `/api/instagram/oauth/start${accountId ? `?account=${encodeURIComponent(accountId)}` : ""}`;
+  const [appId, setAppId] = useState<string>();
+  const startUrl = oauthStartUrl(accountId, appId);
 
   useEffect(() => {
     if (status !== "waiting") return;
@@ -55,10 +67,17 @@ export function InstagramConnectButton({
     };
   }, [status, router]);
 
-  function start() {
-    popup.current = window.open(startUrl, "instagestor-instagram-oauth", "popup,width=560,height=760");
+  function start(chosen?: string) {
+    setAppId(chosen);
+    popup.current = window.open(oauthStartUrl(accountId, chosen), "instagestor-instagram-oauth", "popup,width=560,height=760");
     setStatus(popup.current ? "waiting" : "blocked");
     if (!dialog.current?.open) dialog.current?.showModal();
+  }
+
+  function open() {
+    if (apps.length < 2) return start(apps[0]?.id);
+    setStatus("picking");
+    dialog.current?.showModal();
   }
 
   function onClose() {
@@ -68,22 +87,39 @@ export function InstagramConnectButton({
   }
 
   const message = status ? (status in STATUS_COPY ? STATUS_COPY[status as keyof typeof STATUS_COPY] : OAUTH_RESULT_MESSAGES[status as OauthResult]) : "";
-  const failed = status !== null && !["waiting", "success"].includes(status);
+  const failed = status !== null && !["picking", "waiting", "success"].includes(status);
+  const verb = accountId ? "Reconectar" : "Conectar";
 
   return (
     <>
-      <button className={className} type="button" onClick={start}>{children}</button>
+      <button className={className} type="button" onClick={open}>{children}</button>
       <dialog ref={dialog} className="oauth-dialog panel" aria-labelledby="oauth-dialog-title" onClose={onClose}>
-        <h2 id="oauth-dialog-title">{accountId ? "Reconectar Instagram" : "Conectar Instagram"}</h2>
+        <h2 id="oauth-dialog-title">{status === "picking" ? `${verb} via qual Meta App?` : `${verb} Instagram`}</h2>
         <p role="status" aria-live="polite">{message}</p>
-        <p className="muted">O InstaGestor nunca pede sua senha do Instagram: o acesso é concedido pela Meta e pode ser revogado a qualquer momento.</p>
+        {status === "picking" ? (
+          <>
+            <ul className="meta-app-options">
+              {apps.map((app) => (
+                <li key={app.id}>
+                  <button className="meta-app-option" type="button" onClick={() => start(app.id)}>
+                    <strong>{app.name}</strong>
+                    <small>{app.account_count} conta(s) vinculada(s)</small>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <Link className="text-link" href="/meta-apps">Gerenciar Meta Apps →</Link>
+          </>
+        ) : (
+          <p className="muted">O InstaGestor nunca pede sua senha do Instagram: o acesso é concedido pela Meta e pode ser revogado a qualquer momento.</p>
+        )}
         <form method="dialog" className="oauth-dialog-actions">
           {status === "waiting" || status === "blocked" ? (
             <a className="button button-secondary" href={startUrl}>Continuar nesta aba</a>
           ) : null}
-          {failed ? <button className="button button-secondary" type="button" onClick={start}>Tentar novamente</button> : null}
+          {failed ? <button className="button button-secondary" type="button" onClick={() => start(appId)}>Tentar novamente</button> : null}
           <button className={status === "success" ? "button button-primary" : "button button-ghost"} type="submit">
-            {status === "waiting" ? "Cancelar" : "Fechar"}
+            {status === "waiting" || status === "picking" ? "Cancelar" : "Fechar"}
           </button>
         </form>
       </dialog>

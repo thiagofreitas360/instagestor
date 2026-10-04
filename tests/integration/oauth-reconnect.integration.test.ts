@@ -5,6 +5,7 @@ import { decryptToken } from "@/lib/crypto";
 import { resetEnvForTests } from "@/lib/env";
 import { MetaInstagramProvider } from "@/providers/meta-instagram";
 import { connectFromAuthorizationCode, consumeOauthState, createOauthState } from "@/server/accounts";
+import { deleteMetaApp, listMetaApps, saveMetaApp } from "@/server/meta-apps";
 import { createAccounts, createOrganization, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 function metaReturns(profileId: string) {
@@ -87,5 +88,41 @@ describe("OAuth com reconexão direcionada", () => {
     await expect(
       connectFromAuthorizationCode("code", await createOauthState(otherOrganization, otherUser)),
     ).rejects.toMatchObject({ result: "account_already_claimed" });
+  });
+});
+
+describe("Meta Apps por cliente", () => {
+  it("conecta pelo app escolhido, isola clientes e mantém a conta ao remover o app", async () => {
+    const userId = await createUser();
+    await saveMetaApp(TEST_ORGANIZATION_ID, userId, { name: "App A", appId: "1234567890123", appSecret: "secret-app-a-0123456789" });
+    await expect(
+      saveMetaApp(TEST_ORGANIZATION_ID, userId, { name: "Repetido", appId: "1234567890123", appSecret: "outro-secret-0123456789" }),
+    ).rejects.toThrow("já está cadastrado");
+    const [app] = await listMetaApps(TEST_ORGANIZATION_ID);
+    expect(app).not.toHaveProperty("encrypted_app_secret");
+
+    // Edição sem secret mantém o anterior.
+    await saveMetaApp(TEST_ORGANIZATION_ID, userId, { id: app.id, name: "App A2", appId: "1234567890123" });
+
+    metaReturns("via-app");
+    await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId, undefined, app.id));
+    expect(MetaInstagramProvider.prototype.exchangeAuthorizationCode).toHaveBeenCalledWith("code", {
+      appId: "1234567890123", appSecret: "secret-app-a-0123456789",
+    });
+    expect((await listMetaApps(TEST_ORGANIZATION_ID))[0]).toMatchObject({ name: "App A2", account_count: 1 });
+
+    await deleteMetaApp(TEST_ORGANIZATION_ID, userId, app.id);
+    const [account] = await getSqlClient()<{ meta_app_id: string | null; encrypted_access_token: string | null }[]>`
+      SELECT meta_app_id, encrypted_access_token FROM instagram_accounts WHERE instagram_user_id = 'via-app'
+    `;
+    expect(account.meta_app_id).toBeNull();
+    expect(account.encrypted_access_token).not.toBeNull();
+
+    // App de outro cliente é recusado pela FK (organization_id, meta_app_id).
+    await saveMetaApp(TEST_ORGANIZATION_ID, userId, { name: "App B", appId: "9876543210123", appSecret: "secret-app-b-0123456789" });
+    const [appB] = await listMetaApps(TEST_ORGANIZATION_ID);
+    const otherOrganization = randomUUID();
+    const otherUser = await createUser("outro-app@example.test", otherOrganization);
+    await expect(createOauthState(otherOrganization, otherUser, undefined, appB.id)).rejects.toThrow();
   });
 });

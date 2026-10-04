@@ -121,6 +121,27 @@ export const organizations = pgTable("organizations", {
   check("organizations_slug_valid", sql`${table.slug} ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$'`),
 ]);
 
+// Apps do Meta for Developers de cada cliente; sem nenhum, o OAuth usa o app de INSTAGRAM_APP_ID.
+export const metaApps = pgTable(
+  "meta_apps",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    appId: text("app_id").notNull(),
+    encryptedAppSecret: text("encrypted_app_secret").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    unique("meta_apps_organization_id_unique").on(table.organizationId, table.id),
+    unique("meta_apps_organization_app_id_unique").on(table.organizationId, table.appId),
+    check("meta_apps_name_valid", sql`length(trim(${table.name})) BETWEEN 1 AND 60`),
+    check("meta_apps_app_id_valid", sql`${table.appId} ~ '^[0-9]{10,20}$'`),
+  ],
+);
+
 export const organizationMembers = pgTable(
   "organization_members",
   {
@@ -172,6 +193,7 @@ export const instagramAccounts = pgTable(
     insightsErrorCode: text("insights_error_code"),
     bannedAt: timestamp("banned_at", { withTimezone: true }),
     banReason: text("ban_reason"),
+    metaAppId: uuid("meta_app_id").references(() => metaApps.id, { onDelete: "set null" }),
     ...timestamps,
     disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
   },
@@ -795,6 +817,7 @@ export const oauthStates = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     nonceHash: text("nonce_hash").notNull().unique(),
     targetInstagramAccountId: uuid("target_instagram_account_id"),
+    metaAppId: uuid("meta_app_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     usedAt: timestamp("used_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -810,6 +833,11 @@ export const oauthStates = pgTable(
       columns: [table.organizationId, table.targetInstagramAccountId],
       foreignColumns: [instagramAccounts.organizationId, instagramAccounts.id],
       name: "oauth_states_target_account_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.organizationId, table.metaAppId],
+      foreignColumns: [metaApps.organizationId, metaApps.id],
+      name: "oauth_states_meta_app_fk",
     }).onDelete("cascade"),
   ],
 );

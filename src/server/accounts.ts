@@ -9,6 +9,7 @@ import { getInstagramProvider, MetaInstagramProvider } from "@/providers";
 import { COMMENTS_SCOPE, INSIGHTS_SCOPE } from "@/providers/instagram";
 import { markAccountUnavailableIfCurrent } from "@/jobs/account-availability";
 import { audit } from "./auth";
+import { getMetaAppCredentials } from "./meta-apps";
 
 const FAKE_SCOPES = ["instagram_business_basic", "instagram_business_content_publish", INSIGHTS_SCOPE, COMMENTS_SCOPE];
 type Sql = TransactionSql;
@@ -222,13 +223,20 @@ export async function verifyAccount(accountId: string, organizationId: string) {
   }
 }
 
-export async function createOauthState(organizationId: string, actorUserId: string, targetAccountId?: string) {
+export async function createOauthState(
+  organizationId: string,
+  actorUserId: string,
+  targetAccountId?: string,
+  metaAppId?: string,
+) {
   if (getEnv().INSTAGRAM_PROVIDER !== "meta") throw new Error("OAuth real requer INSTAGRAM_PROVIDER=meta");
   const state = randomSecret(32);
   const target = targetAccountId ?? null;
+  // A FK (organization_id, meta_app_id) recusa app de outro cliente.
   const created = await getSqlClient()`
-    INSERT INTO oauth_states (organization_id, initiated_by, nonce_hash, expires_at, target_instagram_account_id)
-    SELECT ${organizationId}, ${actorUserId}, ${sha256(state)}, now() + interval '10 minutes', ${target}::uuid
+    INSERT INTO oauth_states (organization_id, initiated_by, nonce_hash, expires_at, target_instagram_account_id, meta_app_id)
+    SELECT ${organizationId}, ${actorUserId}, ${sha256(state)}, now() + interval '10 minutes', ${target}::uuid,
+      ${metaAppId ?? null}::uuid
     WHERE ${target}::uuid IS NULL OR EXISTS (
       SELECT 1 FROM instagram_accounts WHERE organization_id = ${organizationId} AND id = ${target}::uuid
     )
@@ -240,11 +248,14 @@ export async function createOauthState(organizationId: string, actorUserId: stri
 
 export async function consumeOauthState(state: string) {
   const [valid] = await getSqlClient()<
-    { id: string; organization_id: string; initiated_by: string; target_instagram_account_id: string | null }[]
+    {
+      id: string; organization_id: string; initiated_by: string;
+      target_instagram_account_id: string | null; meta_app_id: string | null;
+    }[]
   >`
     UPDATE oauth_states SET used_at = now()
     WHERE nonce_hash = ${sha256(state)} AND used_at IS NULL AND expires_at > now()
-    RETURNING id, organization_id, initiated_by, target_instagram_account_id
+    RETURNING id, organization_id, initiated_by, target_instagram_account_id, meta_app_id
   `;
   if (!valid) throw new OauthFlowError("state_expired", "OAuth state inválido, expirado ou já utilizado");
   return valid;
@@ -253,7 +264,8 @@ export async function consumeOauthState(state: string) {
 export async function connectFromAuthorizationCode(code: string, state: string) {
   const oauth = await consumeOauthState(state);
   const provider = new MetaInstagramProvider();
-  const exchanged = await provider.exchangeAuthorizationCode(code);
+  const app = oauth.meta_app_id ? await getMetaAppCredentials(oauth.organization_id, oauth.meta_app_id) : undefined;
+  const exchanged = await provider.exchangeAuthorizationCode(code, app);
   const profile = await provider.getProfile(exchanged.accessToken);
   const encrypted = encryptToken(exchanged.accessToken);
   const account = await getSqlClient().begin(async (sql) => {
@@ -270,12 +282,12 @@ export async function connectFromAuthorizationCode(code: string, state: string) 
       INSERT INTO instagram_accounts (
         organization_id, instagram_user_id, app_scoped_user_id, username, display_name, profile_picture_url, account_type,
         status, encrypted_access_token, authorized_at, token_expires_at, token_last_refreshed_at, token_last_checked_at,
-        last_successful_api_call_at, disconnected_at, granted_scopes, banned_at, ban_reason, insights_synced_at
+        last_successful_api_call_at, disconnected_at, granted_scopes, banned_at, ban_reason, insights_synced_at, meta_app_id
       ) VALUES (
         ${oauth.organization_id}, ${profile.id}, ${profile.appScopedUserId ?? exchanged.appScopedUserId}, ${profile.username},
         ${profile.displayName ?? null}, ${profile.profilePictureUrl ?? null}, ${profile.accountType ?? null},
         'CONNECTED', ${encrypted}, now(), now() + ${exchanged.expiresIn} * interval '1 second', now(), now(), now(), NULL,
-        ${exchanged.permissions}, NULL, NULL, NULL
+        ${exchanged.permissions}, NULL, NULL, NULL, ${oauth.meta_app_id ?? null}
       )
       ON CONFLICT (instagram_user_id) DO UPDATE SET
         app_scoped_user_id = EXCLUDED.app_scoped_user_id, username = EXCLUDED.username,
@@ -284,7 +296,7 @@ export async function connectFromAuthorizationCode(code: string, state: string) 
         encrypted_access_token = EXCLUDED.encrypted_access_token, token_expires_at = EXCLUDED.token_expires_at,
         authorized_at = now(), token_last_refreshed_at = now(), token_last_checked_at = now(), last_successful_api_call_at = now(),
         disconnected_at = NULL, granted_scopes = EXCLUDED.granted_scopes, banned_at = NULL, ban_reason = NULL,
-        insights_synced_at = NULL, updated_at = now()
+        insights_synced_at = NULL, meta_app_id = EXCLUDED.meta_app_id, updated_at = now()
       WHERE instagram_accounts.organization_id = EXCLUDED.organization_id
       RETURNING id, (xmax = 0) AS inserted
     `;

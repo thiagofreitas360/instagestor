@@ -5,6 +5,7 @@ import { EmptyState, formatDate, MessageBanner, PageHeader, Panel, StatusBadge, 
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { InstagramConnectButton } from "@/components/instagram-connect-button";
 import { requireAdmin } from "@/server/auth";
+import { listMetaApps } from "@/server/meta-apps";
 
 type AccountRow = {
   id: string;
@@ -22,6 +23,7 @@ type AccountRow = {
   last_error_at: Date | null;
   last_error_message: string | null;
   group_ids: string[];
+  meta_app_name: string | null;
 };
 type GroupRow = { id: string; name: string };
 
@@ -37,7 +39,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const user = await requireAdmin();
   const params = await searchParams;
   const sql = getSqlClient();
-  const [accounts, groups] = await Promise.all([
+  const [accounts, groups, apps] = await Promise.all([
     sql<AccountRow[]>`
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.account_type, account.status,
         account.token_expires_at,
@@ -48,7 +50,8 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         coalesce(array_agg(DISTINCT group_row.id::text)
           FILTER (WHERE group_row.id IS NOT NULL), '{}') AS group_ids,
         count(DISTINCT job.id) FILTER (WHERE job.status = 'PUBLISHED')::int AS published_count,
-        max(job.published_at) FILTER (WHERE job.status = 'PUBLISHED') AS last_published_at
+        max(job.published_at) FILTER (WHERE job.status = 'PUBLISHED') AS last_published_at,
+        (SELECT app.name FROM meta_apps app WHERE app.id = account.meta_app_id) AS meta_app_name
       FROM instagram_accounts account
       LEFT JOIN account_group_members member ON member.organization_id = account.organization_id
         AND member.instagram_account_id = account.id
@@ -64,6 +67,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         account.username
     `,
     sql<GroupRow[]>`SELECT id, name FROM account_groups WHERE organization_id = ${user.organizationId} ORDER BY name`,
+    listMetaApps(user.organizationId),
   ]);
   const fakeMode = process.env.INSTAGRAM_PROVIDER === "fake"
     && (process.env.NODE_ENV !== "production" || process.env.ALLOW_FAKE_PROVIDER_IN_PRODUCTION === "true");
@@ -93,7 +97,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         title="Contas do Instagram"
         description={`${connected} de ${accounts.length} contas disponíveis para publicação${needsAttention ? ` · ${needsAttention} precisam de atenção` : ""}.`}
         actions={
-          <InstagramConnectButton>Conectar Instagram</InstagramConnectButton>
+          <InstagramConnectButton apps={apps}>Conectar Instagram</InstagramConnectButton>
         }
       />
       <MessageBanner error={first(params.erro)} success={first(params.ok)} />
@@ -182,7 +186,10 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                           </span>
                           <span>
                             <strong>{account.display_name ?? `@${account.username}`}</strong>
-                            <small>@{account.username}{account.account_type ? ` · ${account.account_type}` : ""}</small>
+                            <small>
+                              @{account.username}{account.account_type ? ` · ${account.account_type}` : ""}
+                              {account.meta_app_name ? ` · via ${account.meta_app_name}` : ""}
+                            </small>
                           </span>
                         </Link>
                       </td>
@@ -220,7 +227,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                       </td>
                       <td data-label="Ação" className="table-action-column">
                         <div className="table-actions">
-                          {account.status === "REAUTH_REQUIRED" ? <InstagramConnectButton accountId={account.id} className="button button-small button-primary">Reconectar</InstagramConnectButton> : null}
+                          {account.status === "REAUTH_REQUIRED" ? <InstagramConnectButton accountId={account.id} apps={apps} className="button button-small button-primary">Reconectar</InstagramConnectButton> : null}
                           <Link className="button button-small button-secondary" href={`/contas/${account.id}`}>Detalhes</Link>
                           {!(["DISCONNECTED", "DISABLED", "BANNED"].includes(account.status)) ? (
                             <form action={disconnectAccountAction}>
@@ -242,7 +249,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
             description={accounts.length ? "Escolha outro filtro para ver as demais contas." : "Conecte uma conta profissional do Instagram para começar a publicar."}
             href={accounts.length ? "/contas" : undefined}
             actionLabel={accounts.length ? "Mostrar todas" : undefined}
-            action={<InstagramConnectButton className="button button-secondary">Conectar Instagram</InstagramConnectButton>}
+            action={<InstagramConnectButton apps={apps} className="button button-secondary">Conectar Instagram</InstagramConnectButton>}
           />
         )}
       </Panel>

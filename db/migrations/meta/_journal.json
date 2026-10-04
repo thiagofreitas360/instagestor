@@ -141,6 +141,13 @@
       "when": 1791123871091,
       "tag": "0019_oauth_reconnect_target",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791151718731,
+      "tag": "0020_meta_apps",
+      "breakpoints": true
     }
   ]
 }

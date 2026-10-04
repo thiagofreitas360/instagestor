@@ -9,6 +9,7 @@ import {
   type MediaOrder, type MediaRow, type PeriodDays, type RankingOrder, type Totals,
 } from "@/server/analytics";
 import { requireAdmin } from "@/server/auth";
+import { listMetaApps } from "@/server/meta-apps";
 import { InstagramConnectButton } from "@/components/instagram-connect-button";
 
 type Query = Record<string, string | string[] | undefined>;
@@ -100,7 +101,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
   };
 
   const sql = getSqlClient();
-  const [accounts, groups] = await Promise.all([
+  const [accounts, groups, apps] = await Promise.all([
     sql<Array<{ id: string; username: string; display_name: string | null; profile_picture_url: string | null; status: string; biography: string | null; website: string | null; followers_count: number | null; follows_count: number | null; media_count: number | null }>>`
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.status, account.biography, account.website,
         latest.followers_count, latest.follows_count, latest.media_count
@@ -117,6 +118,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
     sql<Array<{ id: string; name: string }>>`
       SELECT id, name FROM account_groups WHERE organization_id = ${user.organizationId} ORDER BY name
     `,
+    listMetaApps(user.organizationId),
   ]);
 
   const selectedAccount = accountId ? accounts.find((account) => account.id === accountId) : undefined;
@@ -199,7 +201,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
           <ul className="tag-list">
             {data.missingScope.map((account) => <li key={account.id}>@{account.username}</li>)}
           </ul>
-          <InstagramConnectButton className="button button-secondary">Reconectar via Meta</InstagramConnectButton>
+          <InstagramConnectButton apps={apps} className="button button-secondary">Reconectar via Meta</InstagramConnectButton>
         </Panel>
       ) : null}
       {data.syncErrors.length ? (
@@ -232,7 +234,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
         <EmptyState
           title="Nenhuma conta com análises"
           description="Conecte (ou reconecte) contas concedendo a permissão de insights. O worker sincroniza automaticamente em até 1 minuto."
-          action={<InstagramConnectButton className="button button-secondary">Conectar Instagram</InstagramConnectButton>}
+          action={<InstagramConnectButton apps={apps} className="button button-secondary">Conectar Instagram</InstagramConnectButton>}
         />
       ) : (
         <>

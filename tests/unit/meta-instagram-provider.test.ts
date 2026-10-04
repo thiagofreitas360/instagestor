@@ -26,7 +26,7 @@ beforeEach(() => {
 });
 
 describe("MetaInstagramProvider OAuth e ciclo do token", () => {
-  it("gera URL OAuth com state, permissões mínimas e reautenticação explícita", () => {
+  it("gera URL OAuth com state e permissões mínimas, reaproveitando o login do navegador", () => {
     const url = new URL(new MetaInstagramProvider().authorizationUrl("nonce-imprevisivel"));
 
     expect(url.origin + url.pathname).toBe("https://www.instagram.com/oauth/authorize");
@@ -34,8 +34,29 @@ describe("MetaInstagramProvider OAuth e ciclo do token", () => {
     expect(url.searchParams.get("scope")).toBe(
       "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights",
     );
-    expect(url.searchParams.get("force_reauth")).toBe("true");
+    expect(url.searchParams.get("force_reauth")).toBeNull();
+    expect(url.searchParams.get("client_id")).toBe("app-123");
     expect(url.searchParams.get("redirect_uri")).toBe(process.env.INSTAGRAM_REDIRECT_URI);
+  });
+
+  it("usa o Meta App do cliente na URL e nas duas trocas de token", async () => {
+    const app = { appId: "9876543210123", appSecret: "secret-do-app-do-cliente" };
+    const url = new URL(new MetaInstagramProvider().authorizationUrl("state", app.appId));
+    expect(url.searchParams.get("client_id")).toBe(app.appId);
+
+    const mockedFetch = fetchMock(
+      jsonResponse({ data: [{
+        access_token: "curto", user_id: "app-scoped-7",
+        permissions: ["instagram_business_basic", "instagram_business_content_publish"],
+      }] }),
+      jsonResponse({ access_token: "longo", expires_in: 5_184_000 }),
+    );
+    await new MetaInstagramProvider().exchangeAuthorizationCode("codigo", app);
+
+    const body = mockedFetch.mock.calls[0][1]?.body as FormData;
+    expect(body.get("client_id")).toBe(app.appId);
+    expect(body.get("client_secret")).toBe(app.appSecret);
+    expect(new URL(String(mockedFetch.mock.calls[1][0])).searchParams.get("client_secret")).toBe(app.appSecret);
   });
 
   it("troca o código curto e depois o token longo sem expor segredo na query da primeira chamada", async () => {
