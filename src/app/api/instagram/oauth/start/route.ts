@@ -6,7 +6,14 @@ import { createOauthState } from "@/server/accounts";
 import { MetaInstagramProvider } from "@/providers";
 
 export async function GET(request: Request) {
-  const user = await requireAdminApi();
+  let user: Awaited<ReturnType<typeof requireAdminApi>>;
+  try {
+    user = await requireAdminApi();
+  } catch (error) {
+    // Sem sessão (ex.: popup aberto após expirar o login): leva ao login em vez de 500.
+    if (error instanceof Response) return Response.redirect(`${getEnv().APP_URL}/login`, 302);
+    throw error;
+  }
   const account = new URL(request.url).searchParams.get("account");
   const targetAccountId = account ? z.uuid().safeParse(account).data : undefined;
   try {
