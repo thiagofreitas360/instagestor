@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getEnv } from "@/lib/env";
+import { oauthFallbackUrl } from "@/lib/oauth-result";
 import { log } from "@/lib/logger";
 import { requireAdminApi } from "@/server/auth";
 import { createOauthState } from "@/server/accounts";
@@ -11,7 +12,7 @@ export async function GET(request: Request) {
   try {
     user = await requireAdminApi();
   } catch (error) {
-    // Sem sessão (ex.: popup aberto após expirar o login): leva ao login em vez de 500.
+    // Sem sessão (ex.: login expirado): leva ao login em vez de 500.
     if (error instanceof Response) return Response.redirect(`${getEnv().APP_URL}/login`, 302);
     throw error;
   }
@@ -32,6 +33,6 @@ export async function GET(request: Request) {
     return Response.redirect(new MetaInstagramProvider().authorizationUrl(state, appId), 302);
   } catch (error) {
     log("warn", "oauth", "oauth_start_failed", { organizationId: user.organizationId, message: (error as Error).message });
-    return Response.redirect(`${getEnv().APP_URL}/instagram/oauth/complete?result=connection_failed`, 302);
+    return Response.redirect(`${getEnv().APP_URL}${oauthFallbackUrl("connection_failed")}`, 302);
   }
 }

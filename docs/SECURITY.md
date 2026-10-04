@@ -26,7 +26,7 @@ O cookie é assinado, não criptografado, e contém somente identificador, role 
 - callback consome o state atomicamente antes de trocar o código;
 - reconexão grava `target_instagram_account_id` no state (validado contra a organização) e recusa com `wrong_reconnect_account` se a Meta devolver outra conta;
 - conta já vinculada a outro cliente é recusada com `account_already_claimed`, sem revelar o outro cliente;
-- o fluxo roda em popup: o callback redireciona para `/instagram/oauth/complete?result=<código>` (lista fechada de códigos, nunca código OAuth/token/mensagem da Meta), que envia `postMessage` somente para o origin de `APP_URL`; a janela principal valida `origin`, `source` e o schema da mensagem e recarrega a lista do servidor. Sem `window.opener`, o fluxo cai para a mesma aba;
+- o fluxo roda na própria aba: o callback redireciona para `/contas` com a mensagem fixa do resultado (lista fechada de códigos, nunca código OAuth/token/mensagem da Meta);
 - nenhum header COOP é enviado, para não cortar `window.opener` (o Instagram responde `Cross-Origin-Opener-Policy: unsafe-none`);
 - callbacks de desautorização e exclusão verificam `signed_request` com HMAC-SHA256 e comparação constante;
 - códigos OAuth, tokens e App Secret não devem aparecer em logs nem no frontend.

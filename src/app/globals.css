@@ -638,7 +638,6 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--brand); 
 .meta-app-option strong { font-size: 13px; }
 .meta-app-option small { color: var(--text-faint); font-size: 11px; }
 .meta-app-steps { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: var(--text-soft); font-size: 12px; }
-.oauth-complete { display: grid; min-height: 100vh; place-items: center; padding: 16px; color: var(--text); font-size: 14px; text-align: center; }
 
 .legal-page { max-width: 760px; margin: 0 auto; padding: 48px 16px; color: var(--text); font-size: 14px; line-height: 1.65; }
 .legal-page h1 { margin: 0 0 8px; font-size: 26px; font-weight: 760; }

@@ -12,8 +12,6 @@ export const OAUTH_RESULTS = [
 ] as const;
 export type OauthResult = (typeof OAUTH_RESULTS)[number];
 
-export const OAUTH_MESSAGE_TYPE = "instagestor:instagram-oauth";
-
 export const OAUTH_RESULT_MESSAGES: Record<OauthResult, string> = {
   success: "Conta do Instagram conectada.",
   cancelled: "A autorização foi cancelada na Meta.",
@@ -30,18 +28,6 @@ export class OauthFlowError extends Error {
     super(message);
     this.name = "OauthFlowError";
   }
-}
-
-export function parseOauthResult(value: unknown): OauthResult | null {
-  return OAUTH_RESULTS.find((result) => result === value) ?? null;
-}
-
-/** Aceita somente `{ type, result }` exatos vindos da página de conclusão. */
-export function parseOauthMessage(data: unknown): OauthResult | null {
-  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
-  const record = data as Record<string, unknown>;
-  if (Object.keys(record).length !== 2 || record.type !== OAUTH_MESSAGE_TYPE) return null;
-  return parseOauthResult(record.result);
 }
 
 export function oauthResultFromError(error: unknown): OauthResult {

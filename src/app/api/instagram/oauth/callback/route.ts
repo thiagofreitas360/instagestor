@@ -1,6 +1,6 @@
 import { getEnv } from "@/lib/env";
 import { log } from "@/lib/logger";
-import { oauthResultFromError, type OauthResult } from "@/lib/oauth-result";
+import { oauthFallbackUrl, oauthResultFromError, type OauthResult } from "@/lib/oauth-result";
 import { connectFromAuthorizationCode } from "@/server/accounts";
 
 export async function GET(request: Request) {
@@ -19,6 +19,6 @@ export async function GET(request: Request) {
     }
   }
   log("info", "oauth", "oauth_finished", { result });
-  // Somente o código sanitizado vai para a URL; nunca o código OAuth, token ou mensagem bruta da Meta.
-  return Response.redirect(`${getEnv().APP_URL}/instagram/oauth/complete?result=${result}`, 302);
+  // Somente a mensagem fixa do resultado vai para a URL; nunca o código OAuth, token ou mensagem bruta da Meta.
+  return Response.redirect(`${getEnv().APP_URL}${oauthFallbackUrl(result)}`, 302);
 }
