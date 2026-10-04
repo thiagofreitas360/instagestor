@@ -646,3 +646,94 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--brand); 
 .legal-page ul, .legal-page ol { padding-left: 22px; list-style: revert; }
 .legal-page a { color: var(--brand); text-decoration: underline; }
 .legal-page code { font-size: 12px; }
+
+/* Loops: abas, cards compactos e editor sob demanda */
+.loop-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.loop-tabs a { margin-bottom: -1px; padding: 9px 16px; border-bottom: 2px solid transparent; color: var(--text-soft); font-size: 13px; font-weight: 650; }
+.loop-tabs a:hover { color: var(--text); }
+.loop-tabs a.is-active { border-color: var(--brand); color: var(--text); }
+.loop-tab-copy { margin: -6px 0 0; color: var(--text-soft); font-size: 12px; }
+.loop-card-list { display: grid; gap: 12px; }
+.loop-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 18px; }
+.loop-card.is-editing { border-color: var(--brand); }
+.loop-card-main { display: grid; min-width: 0; gap: 7px; }
+.loop-card-title { display: flex; align-items: center; gap: 8px; }
+.loop-card-title h3 { margin: 0; font-size: 15px; font-weight: 720; }
+.loop-status { padding: 1px 7px; border-radius: 6px; font-size: 11px; font-weight: 650; }
+.loop-status.is-active { background: var(--success-soft); color: var(--success); }
+.loop-status.is-paused { background: var(--warning-soft); color: var(--warning); }
+.loop-card-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--text-faint); font-size: 11px; }
+.loop-card-accounts { display: flex; flex-wrap: wrap; gap: 4px; }
+.loop-card-accounts span { padding: 2px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-subtle); font-size: 11px; }
+.loop-card-stats { font-size: 11px; }
+.loop-stat-published { color: var(--success); }
+.loop-stat-queued { color: var(--brand-ink); }
+.loop-card-outside { justify-self: start; padding: 3px 8px; border: 1px dashed var(--warning); border-radius: 6px; background: var(--warning-soft); color: var(--warning); font-size: 11px; font-weight: 650; }
+.loop-card-actions { display: flex; flex: 0 0 auto; gap: 2px; }
+.loop-icon-button { display: grid; width: 34px; height: 34px; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--text-faint); }
+.loop-icon-button:hover { background: var(--surface-subtle); color: var(--text); }
+.loop-icon-danger:hover { background: var(--danger-soft); color: var(--danger); }
+.loop-editor { display: grid; gap: 14px; padding: 18px 20px 20px; }
+/* O padding próprio substitui as margens automáticas de .panel. */
+.panel.loop-editor > *, .panel.loop-card > * { margin: 0; }
+.loop-editor-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.loop-editor-header h2 { margin: 0; font-size: 15px; font-weight: 720; }
+.loop-form { display: grid; gap: 14px; }
+.loop-options { display: flex; flex-wrap: wrap; gap: 10px; }
+.loop-segmented { display: flex; align-items: center; gap: 4px; margin: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); }
+.loop-segmented legend { float: left; margin-right: 6px; color: var(--text-faint); font-size: 11px; }
+.loop-segmented label { display: block; }
+.loop-segmented span { display: block; padding: 4px 9px; border-radius: 6px; color: var(--text-soft); font-size: 11px; font-weight: 650; }
+.loop-segmented label:has(input:checked) span { background: var(--brand); color: white; }
+.loop-segmented label:has(input:focus-visible) span { outline: 2px solid var(--brand); outline-offset: 1px; }
+.loop-check { display: flex; align-items: center; gap: 8px; padding: 8px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); font-size: 11px; }
+.loop-grid-three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.loop-only-mixed { display: none; }
+.loop-form:has(input[name="mediaType"][value="MIXED"]:checked) .loop-only-mixed { display: grid; }
+.loop-box { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); }
+.loop-box .loop-check { padding: 0; border: 0; background: transparent; }
+.loop-tier-fields { display: none; }
+.loop-tiers:has(input[name="tieredLimits"]:checked) .loop-tier-fields { display: grid; gap: 10px; }
+.loop-tier-fields .form-hint { margin: 0; }
+.loop-inline-number { display: flex; align-items: center; gap: 8px; color: var(--text-faint); font-weight: 500; }
+.loop-inline-number input[type="number"] { width: 80px; min-height: 32px; padding: 5px 8px; }
+.loop-accounts { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; }
+.loop-accounts legend, .loop-section-label { margin-bottom: 4px; padding: 0; color: #46424d; font-size: 11px; font-weight: 680; }
+.loop-accounts-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.loop-accounts-buttons { display: flex; gap: 6px; }
+.loop-outside-hint { color: var(--warning); font-size: 11px; font-weight: 650; }
+.loop-account-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.loop-account { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); font-size: 12px; font-weight: 600; cursor: pointer; }
+.loop-account:hover { border-color: var(--border-strong); }
+.loop-account:has(input:checked) { border-color: var(--brand); background: var(--brand-soft); }
+.loop-account:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 1px; }
+.loop-account-outside { border-style: dashed; border-color: var(--warning); background: var(--warning-soft); }
+.loop-account-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loop-account small { flex: 0 0 auto; font-size: 10px; font-weight: 650; }
+.loop-note-off { color: var(--warning); }
+.loop-note-on { display: none; color: var(--brand-ink); }
+.loop-account:has(input:checked) .loop-note-off { display: none; }
+.loop-account-outside:has(input:checked) .loop-note-on { display: inline; }
+.account-avatar-tiny { width: 22px; height: 22px; flex-basis: 22px; font-size: 8px; }
+.loop-media { display: grid; gap: 8px; }
+.loop-pool-list { display: grid; max-height: 288px; gap: 4px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.loop-pool-item { display: flex; width: 100%; align-items: center; gap: 8px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-subtle); color: var(--text); font-size: 11px; text-align: left; }
+.loop-pool-item:hover { border-color: var(--border-strong); }
+.loop-pool-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loop-kind { flex: 0 0 auto; padding: 1px 6px; border-radius: 4px; background: var(--border); color: var(--text-soft); font-size: 9px; font-weight: 800; }
+.loop-pool-remove, .loop-pool-add { color: var(--text-faint); font-size: 15px; line-height: 1; }
+.loop-pool-item:hover .loop-pool-remove { color: var(--danger); }
+.loop-pool-item:hover .loop-pool-add { color: var(--brand-ink); }
+.loop-upload { display: flex; align-items: center; gap: 8px; padding: 12px; border: 1px dashed var(--border-strong); border-radius: 8px; color: var(--text-soft); font-size: 12px; cursor: pointer; }
+.loop-upload:hover { background: var(--surface-subtle); }
+.loop-upload:has(input:focus-visible) { outline: 2px solid var(--brand); }
+.loop-upload.is-busy { cursor: progress; opacity: 0.7; }
+.loop-library-body { display: grid; gap: 8px; padding: 10px; }
+[data-theme="DARK"] :is(.loop-accounts legend, .loop-section-label) { color: var(--text-soft); }
+@media (max-width: 720px) {
+  .loop-card { flex-direction: column; }
+  .loop-grid-three, .loop-account-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 480px) {
+  .loop-grid-three, .loop-account-grid { grid-template-columns: 1fr; }
+}

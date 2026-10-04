@@ -470,7 +470,6 @@ async function loopInputFromForm(formData: FormData, user: { id: string; organiz
     tier1MaxIntervalMinutes: z.coerce.number().int().min(1).max(1440),
     mediaType: z.enum(["REELS", "IMAGE", "MIXED"]),
     imageEveryN: z.coerce.number().int().min(1).max(100),
-    mode: z.enum(["CONTINUOUS", "LIMITED"]),
   }).parse({
     name: formData.get("name"),
     defaultCaption: String(formData.get("defaultCaption") ?? "") || undefined,
@@ -485,7 +484,6 @@ async function loopInputFromForm(formData: FormData, user: { id: string; organiz
     tier1MaxIntervalMinutes: formData.get("tier1MaxIntervalMinutes") || 120,
     mediaType: formData.get("mediaType"),
     imageEveryN: formData.get("imageEveryN") || 1,
-    mode: formData.get("mode"),
   });
   if (values.maxIntervalMinutes < values.minIntervalMinutes) {
     throw new Error("O intervalo máximo deve ser maior ou igual ao mínimo");
@@ -510,7 +508,7 @@ async function loopInputFromForm(formData: FormData, user: { id: string; organiz
     tier1MaxIntervalMinutes: values.tier1MaxIntervalMinutes,
     mediaType: values.mediaType,
     imageEveryN: values.imageEveryN,
-    noRepeat: values.mode === "LIMITED",
+    noRepeat: formData.get("noRepeat") === "on",
     accountIds,
     mediaIds: formData.getAll("mediaIds").map(String).map((value) => id.parse(value)),
   };

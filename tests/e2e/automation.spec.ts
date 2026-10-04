@@ -29,25 +29,30 @@ test("cria e edita loop, cria escala e alterna o tema", async ({ page }) => {
   await login(page);
 
   await page.goto("/loops");
-  await expect(page.getByRole("heading", { name: "Loops de publicação" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Loops", exact: true })).toBeVisible();
+  // Fechado, só aparecem os cards; o editor abre pelo "Novo loop".
+  await expect(page.getByRole("button", { name: "Criar e iniciar loop" })).toHaveCount(0);
+  await page.getByRole("link", { name: "Novo loop" }).click();
   const loopForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Criar e iniciar loop" }) });
-  await loopForm.getByLabel("Nome").fill(loopName);
-  await loopForm.getByLabel("Modo").selectOption("LIMITED");
-  await loopForm.getByLabel("Tipo de mídia").selectOption("IMAGE");
-  await loopForm.getByLabel("Usar limites menores para contas pequenas").check();
+  await loopForm.getByLabel("Nome do loop").fill(loopName);
+  await loopForm.getByText("Imagem", { exact: true }).click();
+  await loopForm.getByLabel("Limitado (não repetir mídias)").check();
+  await loopForm.getByLabel("Limites por faixa de seguidores").check();
   await loopForm.getByLabel("Limite diário da faixa").fill("7");
   await loopForm.getByLabel("Auto-comentário").fill("Link na bio");
-  await loopForm.getByLabel("Esperar após publicar (min)").fill("2");
-  await loopForm.getByLabel("Todas as contas disponíveis").check();
-  await loopForm.locator("label.selectable-media").filter({ hasText: filename }).getByRole("checkbox").check();
+  await loopForm.getByLabel(/Esperar/).fill("2");
+  await loopForm.getByRole("button", { name: "Selecionar todas" }).click();
+  await loopForm.getByText(/Adicionar do acervo/).click();
+  await loopForm.getByRole("button", { name: new RegExp(filename) }).click();
+  await expect(loopForm.getByText(/Mídias atuais no pool \(1\)/)).toBeVisible();
   await loopForm.getByRole("button", { name: "Criar e iniciar loop" }).click();
   await expect(page.getByText(/Loop criado para/)).toBeVisible();
 
-  const loopRow = page.locator("tbody tr").filter({ hasText: loopName });
-  await expect(loopRow).toBeVisible();
-  await loopRow.getByRole("link", { name: "Editar" }).click();
+  const loopCard = page.locator("article.loop-card").filter({ hasText: loopName });
+  await expect(loopCard).toBeVisible();
+  await loopCard.getByRole("link", { name: `Editar ${loopName}` }).click();
   const editForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Salvar alterações" }) });
-  await editForm.getByLabel("Intervalo mínimo (min)").fill("30");
+  await editForm.getByLabel("Intervalo mín (min)").fill("30");
   await editForm.getByRole("button", { name: "Salvar alterações" }).click();
   await expect(page.getByText("Loop atualizado")).toBeVisible();
 
