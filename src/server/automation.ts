@@ -653,6 +653,20 @@ export async function deleteLoop(loopId: string, actorUserId: string, organizati
         AND status IN ('DRAFT', 'QUEUED', 'RETRY_WAIT')
     `;
     await sql`UPDATE campaigns SET status = 'CANCELLED', cancelled_at = now(), updated_at = now() WHERE organization_id = ${organizationId} AND id = ${loop.campaign_id}`;
+    // Jobs de loop nascem todos na posição 0. O DELETE abaixo zera loop_id (ON DELETE SET NULL) e
+    // eles passam a valer no índice único (campanha, conta, posição) WHERE loop_id IS NULL:
+    // renumera antes, em ordem cronológica, para o histórico sobreviver sem colidir.
+    await sql`
+      UPDATE publication_jobs job SET publication_position = numbered.position
+      FROM (
+        SELECT id, (row_number() OVER (PARTITION BY instagram_account_id ORDER BY created_at, id)
+          + coalesce((SELECT max(publication_position) FROM publication_jobs
+            WHERE organization_id = ${organizationId} AND campaign_id = ${loop.campaign_id} AND loop_id IS NULL), -1))::int AS position
+        FROM publication_jobs
+        WHERE organization_id = ${organizationId} AND loop_id = ${loopId}
+      ) numbered
+      WHERE job.id = numbered.id
+    `;
     await sql`DELETE FROM loops WHERE organization_id = ${organizationId} AND id = ${loopId}`;
     await sql`
       INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id)

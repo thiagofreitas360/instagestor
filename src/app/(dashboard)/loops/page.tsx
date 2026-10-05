@@ -174,9 +174,9 @@ export default async function LoopsPage({ searchParams }: PageProps) {
               </label>
             </div>
             <div className="loop-grid-three">
-              <label>Intervalo mín (min)<input name="minIntervalMinutes" type="number" min={1} max={1440} defaultValue={editing?.min_interval_minutes ?? 25} required /></label>
+              <label>Intervalo mín (min)<input name="minIntervalMinutes" type="number" min={1} max={1440} defaultValue={editing?.min_interval_minutes ?? 50} required /></label>
               <label>Intervalo máx (min)<input name="maxIntervalMinutes" type="number" min={1} max={1440} defaultValue={editing?.max_interval_minutes ?? 60} required /></label>
-              <label>Limite diário/conta<input name="dailyLimitPerAccount" type="number" min={1} max={200} defaultValue={editing?.daily_limit_per_account ?? 10} required /></label>
+              <label>Limite diário/conta<input name="dailyLimitPerAccount" type="number" min={1} max={200} defaultValue={editing?.daily_limit_per_account ?? 24} required /></label>
               <label className="loop-only-mixed">1 imagem a cada N vídeos<input name="imageEveryN" type="number" min={1} max={100} defaultValue={editing?.image_every_n || 3} required /></label>
             </div>
             <div className="loop-box loop-tiers">

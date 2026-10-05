@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { getSqlClient } from "@/db/client";
-import { createLoop, createSchedule, scheduleNextLoopJob, updateLoop, updateSchedule } from "@/server/automation";
+import {
+  createLoop, createSchedule, deleteLoop, scheduleNextLoopJob, setLoopStatus, updateLoop, updateSchedule,
+} from "@/server/automation";
 import { disconnectAccount } from "@/server/accounts";
 import { createAccounts, createOrganization, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
@@ -72,6 +74,46 @@ describe("loops", () => {
       SELECT finished FROM loop_account_state WHERE loop_id = ${created.loopId} AND instagram_account_id = ${account.id}
     `;
     expect(state.finished).toBe(true);
+  });
+
+  it("deletes a paused loop whose account already published more than once, keeping the history", async () => {
+    const sql = getSqlClient();
+    const actorUserId = await createUser("delete-loop@example.test");
+    const [account] = await createAccounts(1, "delete_loop");
+    const media = await createMedia("VIDEO", 3);
+    const created = await createLoop({
+      organizationId: TEST_ORGANIZATION_ID,
+      actorUserId,
+      name: "Loop para excluir",
+      minIntervalMinutes: 25,
+      maxIntervalMinutes: 25,
+      dailyLimitPerAccount: 10,
+      autoCommentDelayMinutes: 5,
+      tieredLimits: false,
+      tierFollowerThreshold: 10000,
+      tier1DailyLimit: 10,
+      tier1MinIntervalMinutes: 60,
+      tier1MaxIntervalMinutes: 120,
+      mediaType: "REELS",
+      imageEveryN: 1,
+      noRepeat: false,
+      accountIds: [account.id],
+      mediaIds: media.map((asset) => asset.id),
+    });
+    for (let round = 0; round < 2; round += 1) {
+      await sql`UPDATE publication_jobs SET status = 'PUBLISHED', published_at = now()
+        WHERE loop_id = ${created.loopId} AND status = 'QUEUED'`;
+      await scheduleNextLoopJob({ organizationId: TEST_ORGANIZATION_ID, loopId: created.loopId, accountId: account.id, runAt: new Date() });
+    }
+    await setLoopStatus(created.loopId, "PAUSED", actorUserId, TEST_ORGANIZATION_ID);
+
+    await expect(deleteLoop(created.loopId, actorUserId, TEST_ORGANIZATION_ID)).resolves.toBeUndefined();
+
+    const jobs = await sql<Array<{ status: string; loop_id: string | null }>>`
+      SELECT status, loop_id FROM publication_jobs WHERE instagram_account_id = ${account.id}
+    `;
+    expect(jobs.filter((job) => job.status === "PUBLISHED")).toHaveLength(2);
+    expect(jobs.every((job) => job.loop_id === null)).toBe(true);
   });
 
   it("rejects accounts and media from another organization", async () => {
