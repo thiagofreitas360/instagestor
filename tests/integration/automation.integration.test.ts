@@ -51,6 +51,12 @@ describe("loops", () => {
       mediaIds: media.map((asset) => asset.id),
     });
     expect(created.scheduledCount).toBe(1);
+    // Reels do loop vão para a aba Reels e também para o feed (a fila lê share_to_feed da campanha).
+    const [campaign] = await sql<Array<{ share_to_feed: boolean }>>`
+      SELECT campaign.share_to_feed FROM loops JOIN campaigns campaign ON campaign.id = loops.campaign_id
+      WHERE loops.id = ${created.loopId}
+    `;
+    expect(campaign.share_to_feed).toBe(true);
 
     const first = (await sql<Array<{ id: string; direct_media_asset_id: string }>>`
       SELECT id, direct_media_asset_id FROM publication_jobs WHERE loop_id = ${created.loopId}
@@ -303,6 +309,11 @@ describe("recurring schedules", () => {
       mediaIds: media.map((asset) => asset.id),
     });
     expect(created).toMatchObject({ scheduled: 2, jobs: 4, totalSlots: 2, totalMedia: 2 });
+    const [campaign] = await sql<Array<{ share_to_feed: boolean }>>`
+      SELECT campaign.share_to_feed FROM schedules JOIN campaigns campaign ON campaign.id = schedules.campaign_id
+      WHERE schedules.id = ${created.scheduleId}
+    `;
+    expect(campaign.share_to_feed).toBe(true);
     const jobs = await sql<Array<{ direct_media_asset_id: string; publication_position: number; scheduled_at: Date }>>`
       SELECT direct_media_asset_id, publication_position, scheduled_at
       FROM publication_jobs WHERE schedule_id = ${created.scheduleId}

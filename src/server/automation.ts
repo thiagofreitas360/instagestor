@@ -413,11 +413,11 @@ export async function createLoop(input: LoopInput) {
     const [campaign] = await sql<Array<{ id: string }>>`
       INSERT INTO campaigns (
         organization_id, name, origin, publication_type, caption, status,
-        delay_mode, delay_fixed_seconds, target_order, created_by
+        delay_mode, delay_fixed_seconds, target_order, share_to_feed, created_by
       ) VALUES (
         ${input.organizationId}, ${normalized.name}, 'LOOP',
         ${input.mediaType === "IMAGE" ? "FEED_IMAGE" : "REEL"}::publication_type,
-        ${normalized.defaultCaption}, 'RUNNING', 'FIXED', 0, 'SELECTED', ${input.actorUserId}
+        ${normalized.defaultCaption}, 'RUNNING', 'FIXED', 0, 'SELECTED', true, ${input.actorUserId}
       ) RETURNING id
     `;
     const [loop] = await sql<Array<{ id: string }>>`
@@ -723,11 +723,11 @@ export async function createSchedule(input: ScheduleInput) {
     const [campaign] = await sql<Array<{ id: string }>>`
       INSERT INTO campaigns (
         organization_id, name, origin, publication_type, caption, status, start_at,
-        timezone, delay_mode, delay_fixed_seconds, target_order, created_by, scheduled_at
+        timezone, delay_mode, delay_fixed_seconds, target_order, share_to_feed, created_by, scheduled_at
       ) VALUES (
         ${input.organizationId}, ${name}, 'SCHEDULE', ${input.mediaType === "REELS" ? "REEL" : "FEED_IMAGE"}::publication_type,
         ${input.defaultCaption?.trim() ?? ""}, 'SCHEDULED', ${slots[0].toISOString()}, ${input.timezone},
-        'FIXED', 0, 'SELECTED', ${input.actorUserId}, now()
+        'FIXED', 0, 'SELECTED', true, ${input.actorUserId}, now()
       ) RETURNING id
     `;
     const [schedule] = await sql<Array<{ id: string }>>`
