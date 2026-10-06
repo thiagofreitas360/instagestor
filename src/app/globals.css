@@ -661,16 +661,16 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--brand); 
 .media-thumb-small { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; background: var(--border); }
 .metric-grid-analytics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; }
 
-.oauth-dialog { width: min(440px, calc(100vw - 32px)); margin: auto; padding: 22px; color: var(--text); }
+.oauth-dialog { width: min(440px, calc(100vw - 32px)); margin: auto; padding: 22px; background: #ffffff; color: var(--text); box-shadow: var(--shadow-lg); }
 .oauth-dialog::backdrop { background: rgb(15 19 26 / 0.55); }
 .oauth-dialog h2 { margin: 0 0 10px; font-size: 15px; font-weight: 720; }
-.oauth-dialog p { margin: 0 0 10px; font-size: 12px; }
+.oauth-dialog p { margin: 0 0 10px; color: var(--text-soft); font-size: 12px; }
 .oauth-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .meta-app-options { display: grid; gap: 8px; margin: 14px 0 12px; padding: 0; list-style: none; }
 .meta-app-option { display: grid; width: 100%; gap: 3px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); color: var(--text); text-align: left; }
 .meta-app-option:hover, .meta-app-option:focus-visible { border-color: var(--brand); }
 .meta-app-option strong { font-size: 13px; }
-.meta-app-option small { color: var(--text-faint); font-size: 11px; }
+.meta-app-option small { color: var(--text-soft); font-size: 11px; }
 .meta-app-steps { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: var(--text-soft); font-size: 12px; }
 
 .legal-page { max-width: 760px; margin: 0 auto; padding: 48px 16px; color: var(--text); font-size: 14px; line-height: 1.65; }
@@ -876,7 +876,8 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--brand); 
 [data-theme="DARK"] .worker-orb.is-offline { border-color: var(--danger-soft); background: var(--danger); }
 [data-theme="DARK"] :is(.mobile-header, .mobile-menu-panel) { border-color: var(--border); background: #050505; }
 [data-theme="DARK"] .mobile-menu > summary { border-color: var(--border); color: var(--text-soft); }
-[data-theme="DARK"] .oauth-dialog::backdrop { background: rgb(0 0 0 / 0.75); }
+[data-theme="DARK"] .oauth-dialog { border-color: var(--border-strong); background: #111111; box-shadow: 0 24px 64px rgb(0 0 0 / 0.8); }
+[data-theme="DARK"] .oauth-dialog::backdrop { background: rgb(0 0 0 / 0.82); }
 [data-theme="DARK"] .chart-axis { stroke: #1a1a1a; }
 [data-theme="DARK"] .chart figcaption,
 [data-theme="DARK"] .chart-labels { color: var(--text-soft); }
