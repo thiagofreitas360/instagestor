@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { getSqlClient } from "@/db/client";
+import { claimJob, processClaimedJob } from "@/jobs/queue";
+import { encryptToken } from "@/lib/crypto";
 import {
   createLoop, createSchedule, deleteLoop, scheduleNextLoopJob, setLoopStatus, updateLoop, updateSchedule,
 } from "@/server/automation";
@@ -107,10 +109,55 @@ describe("loops", () => {
       mediaIds: media.map((asset) => asset.id),
     });
     expect(created.scheduledCount).toBe(5);
-    const jobs = await sql<Array<{ direct_media_asset_id: string }>>`
-      SELECT direct_media_asset_id FROM publication_jobs WHERE loop_id = ${created.loopId}
+    const jobs = await sql<Array<{ direct_media_asset_id: string; scheduled_at: Date }>>`
+      SELECT direct_media_asset_id, scheduled_at FROM publication_jobs WHERE loop_id = ${created.loopId} ORDER BY scheduled_at
     `;
     expect(new Set(jobs.map((job) => job.direct_media_asset_id)).size).toBe(5);
+    // Primeira rodada espaçada: 2 a 5 minutos entre uma conta e a próxima.
+    for (let index = 1; index < jobs.length; index += 1) {
+      const gap = new Date(jobs[index].scheduled_at).getTime() - new Date(jobs[index - 1].scheduled_at).getTime();
+      expect(gap).toBeGreaterThanOrEqual(120_000);
+      expect(gap).toBeLessThanOrEqual(300_000);
+    }
+  });
+
+  it("lets each loop account publish without waiting for a stuck account", async () => {
+    const sql = getSqlClient();
+    const actorUserId = await createUser("parallel-loop@example.test");
+    const accounts = await createAccounts(2, "parallel_loop");
+    await sql`UPDATE instagram_accounts SET encrypted_access_token = ${encryptToken("fake-token:integration:integration_account")}`;
+    const media = await createMedia("VIDEO", 2);
+    const created = await createLoop({
+      organizationId: TEST_ORGANIZATION_ID,
+      actorUserId,
+      name: "Loop paralelo",
+      minIntervalMinutes: 25,
+      maxIntervalMinutes: 25,
+      dailyLimitPerAccount: 10,
+      autoCommentDelayMinutes: 5,
+      tieredLimits: false,
+      tierFollowerThreshold: 10000,
+      tier1DailyLimit: 10,
+      tier1MinIntervalMinutes: 60,
+      tier1MaxIntervalMinutes: 120,
+      mediaType: "REELS",
+      imageEveryN: 1,
+      noRepeat: false,
+      accountIds: accounts.map((account) => account.id),
+      mediaIds: media.map((asset) => asset.id),
+    });
+    // A primeira conta ficou presa no limite da Meta; a segunda já está na hora.
+    await sql`UPDATE publication_jobs SET status = 'RETRY_WAIT', next_attempt_at = now() + interval '1 hour',
+      scheduled_at = now() - interval '10 minutes', last_error_code = 'PUBLISHING_LIMIT' WHERE loop_id = ${created.loopId} AND instagram_account_id = ${accounts[0].id}`;
+    await sql`UPDATE publication_jobs SET scheduled_at = now() - interval '1 minute'
+      WHERE loop_id = ${created.loopId} AND instagram_account_id = ${accounts[1].id}`;
+
+    const claim = await claimJob("parallel-loop");
+    await processClaimedJob(claim!, "parallel-loop");
+    const [second] = await sql<Array<{ meta_container_id: string | null }>>`
+      SELECT meta_container_id FROM publication_jobs WHERE loop_id = ${created.loopId} AND instagram_account_id = ${accounts[1].id}
+    `;
+    expect(second.meta_container_id).toMatch(/^fake_/);
   });
 
   it("deletes a paused loop whose account already published more than once, keeping the history", async () => {

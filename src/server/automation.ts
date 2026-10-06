@@ -252,6 +252,7 @@ export async function scheduleNextLoopJob(input: {
   accountId: string;
   completedAt?: Date;
   runAt?: Date;
+  startAt?: Date;
 }) {
   return getSqlClient().begin(async (sql) => {
     // Serializa o agendamento por loop: contas agendadas juntas enxergam a mídia que as outras já pegaram.
@@ -325,7 +326,7 @@ export async function scheduleNextLoopJob(input: {
       SELECT default_timezone FROM settings WHERE organization_id = ${input.organizationId}
     `;
     const timezone = preferences?.default_timezone ?? "America/Sao_Paulo";
-    let scheduledAt = input.runAt ?? new Date();
+    let scheduledAt = input.runAt ?? input.startAt ?? new Date();
     if (!input.runAt) {
       const reference = input.completedAt ?? new Date();
       const { start, end } = localDayBounds(reference, timezone);
@@ -417,6 +418,24 @@ export async function scheduleNextLoopJob(input: {
   });
 }
 
+// Primeira rodada espaçada: cada conta agendada começa 2 a 5 minutos depois da anterior.
+async function scheduleLoopAccounts(organizationId: string, loopId: string, accountIds: string[]) {
+  let startAt = Date.now();
+  let scheduledCount = 0;
+  const failedAccountIds: string[] = [];
+  for (const accountId of accountIds) {
+    try {
+      if (await scheduleNextLoopJob({ organizationId, loopId, accountId, startAt: new Date(startAt) })) {
+        scheduledCount++;
+        startAt += randomInt(120, 301) * 1000;
+      }
+    } catch {
+      failedAccountIds.push(accountId);
+    }
+  }
+  return { scheduledCount, failedAccountIds };
+}
+
 export async function reconcileActiveLoops() {
   const rows = await getSqlClient()<Array<{ organization_id: string; loop_id: string; instagram_account_id: string }>>`
     SELECT state.organization_id, state.loop_id, state.instagram_account_id
@@ -502,15 +521,7 @@ export async function createLoop(input: LoopInput) {
     return { loopId: loop.id, accountIds };
   });
 
-  const results = await Promise.allSettled(created.accountIds.map((accountId) => scheduleNextLoopJob({
-    organizationId: input.organizationId,
-    loopId: created.loopId,
-    accountId,
-    runAt: new Date(),
-  })));
-  const failedAccountIds = created.accountIds.filter((_, index) => results[index].status === "rejected");
-  const scheduledCount = results.filter((result) => result.status === "fulfilled" && result.value).length;
-  return { loopId: created.loopId, scheduledCount, failedAccountIds };
+  return { loopId: created.loopId, ...await scheduleLoopAccounts(input.organizationId, created.loopId, created.accountIds) };
 }
 
 export async function updateLoop(loopId: string, input: LoopInput) {
@@ -634,13 +645,7 @@ export async function updateLoop(loopId: string, input: LoopInput) {
     return { status: loop.status, accountIds };
   });
 
-  if (result.status === "ACTIVE") {
-    await Promise.allSettled(result.accountIds.map((accountId) => scheduleNextLoopJob({
-      organizationId: input.organizationId,
-      loopId,
-      accountId,
-    })));
-  }
+  if (result.status === "ACTIVE") await scheduleLoopAccounts(input.organizationId, loopId, result.accountIds);
 }
 
 export async function setLoopStatus(loopId: string, status: "ACTIVE" | "PAUSED", actorUserId: string, organizationId: string) {
@@ -670,11 +675,7 @@ export async function setLoopStatus(loopId: string, status: "ACTIVE" | "PAUSED",
     `;
   });
   if (status === "ACTIVE") {
-    await Promise.allSettled(accounts.map((account) => scheduleNextLoopJob({
-      organizationId,
-      loopId,
-      accountId: account.instagram_account_id,
-    })));
+    await scheduleLoopAccounts(organizationId, loopId, accounts.map((account) => account.instagram_account_id));
   }
 }
 

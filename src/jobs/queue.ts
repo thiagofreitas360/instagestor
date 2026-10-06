@@ -589,6 +589,8 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
               AND earlier.campaign_id = current_job.campaign_id AND earlier.id <> current_job.id
               AND earlier.status NOT IN ('PUBLISHED', 'FAILED', 'CANCELLED', 'RECONCILIATION_REQUIRED')
               AND (earlier.scheduled_at, earlier.created_at) < (current_job.scheduled_at, current_job.created_at)
+              -- Loop: cada conta tem a própria fila; uma conta travada não segura as outras.
+              AND (current_job.loop_id IS NULL OR earlier.instagram_account_id = current_job.instagram_account_id)
           ) AS has_earlier_pending
         FROM publication_jobs current_job
         JOIN campaigns campaign ON campaign.organization_id = current_job.organization_id
