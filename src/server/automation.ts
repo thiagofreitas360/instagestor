@@ -196,36 +196,53 @@ export function effectiveLoopLimits(input: {
   };
 }
 
-function chooseMedia(
-  media: LoopMediaRow[],
-  usedMediaIds: string[],
-  noRepeat: boolean,
-  mediaType: AutomatedMediaType,
-  imageEveryN: number,
-  videosSinceImage: number,
-) {
-  let used = new Set(usedMediaIds);
-  let available = media.filter((item) => !used.has(item.id));
-  if (!available.length) {
-    if (noRepeat) return null;
-    used = new Set();
-    available = media;
-  }
-  if (!available.length) return null;
+function localDayBounds(date: Date, timezone: string) {
+  const local = DateTime.fromJSDate(date, { zone: "utc" }).setZone(timezone);
+  return {
+    start: local.startOf("day").toUTC().toJSDate(),
+    end: local.plus({ days: 1 }).startOf("day").toUTC().toJSDate(),
+  };
+}
 
-  let selected: LoopMediaRow | undefined;
-  if (mediaType === "MIXED") {
-    const images = available.filter((item) => item.media_kind === "IMAGE");
-    const videos = available.filter((item) => item.media_kind === "VIDEO");
-    selected = videosSinceImage >= imageEveryN && images.length ? images[0] : videos[0] ?? images[0];
-  } else {
-    selected = available[0];
+// Mídias são sorteadas, nunca seguem a ordem do pool. Regra principal: a conta não repete mídia no
+// mesmo dia; entre as inéditas do dia, sorteia entre as que as outras contas do loop menos usaram hoje
+// (publicadas ou já agendadas). Esgotado o pool no dia, repete na ordem em que postou (a mais antiga primeiro).
+export function chooseLoopMedia(input: {
+  media: LoopMediaRow[];
+  usedMediaIds: string[];
+  noRepeat: boolean;
+  mediaType: AutomatedMediaType;
+  imageEveryN: number;
+  videosSinceImage: number;
+  lastPostedToday: Map<string, number>;
+  usedByOthersToday: Map<string, number>;
+  random?: (max: number) => number;
+}) {
+  const used = new Set(input.usedMediaIds);
+  let pool = input.noRepeat ? input.media.filter((item) => !used.has(item.id)) : input.media;
+  if (input.mediaType === "MIXED") {
+    const images = pool.filter((item) => item.media_kind === "IMAGE");
+    const videos = pool.filter((item) => item.media_kind === "VIDEO");
+    pool = input.videosSinceImage >= input.imageEveryN && images.length ? images : videos.length ? videos : images;
   }
-  if (!selected) return null;
+  if (!pool.length) return null;
+
+  const fresh = pool.filter((item) => !input.lastPostedToday.has(item.media_asset_id));
+  let selected: LoopMediaRow;
+  if (fresh.length) {
+    const usage = (item: LoopMediaRow) => input.usedByOthersToday.get(item.media_asset_id) ?? 0;
+    const least = Math.min(...fresh.map(usage));
+    const tied = fresh.filter((item) => usage(item) === least);
+    selected = tied[(input.random ?? ((max) => randomInt(max)))(tied.length)];
+  } else {
+    const postedAt = (item: LoopMediaRow) => input.lastPostedToday.get(item.media_asset_id)!;
+    selected = pool.reduce((oldest, item) => (postedAt(item) < postedAt(oldest) ? item : oldest));
+  }
+  used.add(selected.id);
   return {
     selected,
-    usedMediaIds: [...used, selected.id],
-    videosSinceImage: selected.media_kind === "IMAGE" ? 0 : videosSinceImage + 1,
+    usedMediaIds: [...used],
+    videosSinceImage: selected.media_kind === "IMAGE" ? 0 : input.videosSinceImage + 1,
   };
 }
 
@@ -237,6 +254,8 @@ export async function scheduleNextLoopJob(input: {
   runAt?: Date;
 }) {
   return getSqlClient().begin(async (sql) => {
+    // Serializa o agendamento por loop: contas agendadas juntas enxergam a mídia que as outras já pegaram.
+    await sql`SELECT 1 FROM loops WHERE organization_id = ${input.organizationId} AND id = ${input.loopId} FOR UPDATE`;
     const [state] = await sql<Array<{
       campaign_id: string;
       status: "ACTIVE" | "PAUSED";
@@ -301,33 +320,15 @@ export async function scheduleNextLoopJob(input: {
         AND asset.processing_status = 'READY' AND asset.deleted_at IS NULL
       ORDER BY relation.position
     `;
-    const choice = chooseMedia(
-      media,
-      state.used_media_ids,
-      state.no_repeat,
-      state.media_type,
-      state.image_every_n,
-      state.videos_since_image,
-    );
-    if (!choice) {
-      await sql`
-        UPDATE loop_account_state SET finished = true, updated_at = now()
-        WHERE organization_id = ${input.organizationId} AND loop_id = ${input.loopId}
-          AND instagram_account_id = ${input.accountId}
-      `;
-      return null;
-    }
 
+    const [preferences] = await sql<Array<{ default_timezone: string }>>`
+      SELECT default_timezone FROM settings WHERE organization_id = ${input.organizationId}
+    `;
+    const timezone = preferences?.default_timezone ?? "America/Sao_Paulo";
     let scheduledAt = input.runAt ?? new Date();
     if (!input.runAt) {
       const reference = input.completedAt ?? new Date();
-      const [preferences] = await sql<Array<{ default_timezone: string }>>`
-        SELECT default_timezone FROM settings WHERE organization_id = ${input.organizationId}
-      `;
-      const timezone = preferences?.default_timezone ?? "America/Sao_Paulo";
-      const local = DateTime.fromJSDate(reference, { zone: "utc" }).setZone(timezone);
-      const start = local.startOf("day").toUTC().toJSDate();
-      const end = local.plus({ days: 1 }).startOf("day").toUTC().toJSDate();
+      const { start, end } = localDayBounds(reference, timezone);
       const [count] = await sql<Array<{ published: number }>>`
         SELECT count(*)::int AS published FROM publication_jobs
         WHERE organization_id = ${input.organizationId} AND loop_id = ${input.loopId}
@@ -355,6 +356,42 @@ export async function scheduleNextLoopJob(input: {
           maxIntervalMinutes: limits.maxIntervalMinutes,
         });
       }
+    }
+
+    // "Hoje" é o dia local em que o job vai rodar: se o limite empurrou para amanhã, conta o uso de amanhã.
+    const publishDay = localDayBounds(scheduledAt, timezone);
+    const usage = await sql<Array<{ media_asset_id: string; last_posted_here: Date | null; used_by_others: number }>>`
+      SELECT direct_media_asset_id AS media_asset_id,
+        max(published_at) FILTER (WHERE instagram_account_id = ${input.accountId}) AS last_posted_here,
+        count(*) FILTER (WHERE instagram_account_id <> ${input.accountId})::int AS used_by_others
+      FROM publication_jobs
+      WHERE organization_id = ${input.organizationId} AND direct_media_asset_id IS NOT NULL
+        AND (
+          (status = 'PUBLISHED' AND published_at >= ${publishDay.start.toISOString()} AND published_at < ${publishDay.end.toISOString()}
+            AND (instagram_account_id = ${input.accountId} OR loop_id = ${input.loopId}))
+          OR (loop_id = ${input.loopId} AND instagram_account_id <> ${input.accountId}
+            AND status::text = ANY(${[...ACTIVE_JOB_STATUSES]}::text[]))
+        )
+      GROUP BY direct_media_asset_id
+    `;
+    const choice = chooseLoopMedia({
+      media,
+      usedMediaIds: state.used_media_ids,
+      noRepeat: state.no_repeat,
+      mediaType: state.media_type,
+      imageEveryN: state.image_every_n,
+      videosSinceImage: state.videos_since_image,
+      lastPostedToday: new Map(usage.filter((row) => row.last_posted_here)
+        .map((row) => [row.media_asset_id, new Date(row.last_posted_here!).getTime()])),
+      usedByOthersToday: new Map(usage.map((row) => [row.media_asset_id, row.used_by_others])),
+    });
+    if (!choice) {
+      await sql`
+        UPDATE loop_account_state SET finished = true, updated_at = now()
+        WHERE organization_id = ${input.organizationId} AND loop_id = ${input.loopId}
+          AND instagram_account_id = ${input.accountId}
+      `;
+      return null;
     }
 
     await sql`

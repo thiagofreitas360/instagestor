@@ -82,6 +82,37 @@ describe("loops", () => {
     expect(state.finished).toBe(true);
   });
 
+  it("gives each account entering the loop together a different video", async () => {
+    const sql = getSqlClient();
+    const actorUserId = await createUser("distinct-loop@example.test");
+    const accounts = await createAccounts(5, "distinct_loop");
+    const media = await createMedia("VIDEO", 5);
+    const created = await createLoop({
+      organizationId: TEST_ORGANIZATION_ID,
+      actorUserId,
+      name: "Loop sorteado",
+      minIntervalMinutes: 25,
+      maxIntervalMinutes: 25,
+      dailyLimitPerAccount: 10,
+      autoCommentDelayMinutes: 5,
+      tieredLimits: false,
+      tierFollowerThreshold: 10000,
+      tier1DailyLimit: 10,
+      tier1MinIntervalMinutes: 60,
+      tier1MaxIntervalMinutes: 120,
+      mediaType: "REELS",
+      imageEveryN: 1,
+      noRepeat: false,
+      accountIds: accounts.map((account) => account.id),
+      mediaIds: media.map((asset) => asset.id),
+    });
+    expect(created.scheduledCount).toBe(5);
+    const jobs = await sql<Array<{ direct_media_asset_id: string }>>`
+      SELECT direct_media_asset_id FROM publication_jobs WHERE loop_id = ${created.loopId}
+    `;
+    expect(new Set(jobs.map((job) => job.direct_media_asset_id)).size).toBe(5);
+  });
+
   it("deletes a paused loop whose account already published more than once, keeping the history", async () => {
     const sql = getSqlClient();
     const actorUserId = await createUser("delete-loop@example.test");

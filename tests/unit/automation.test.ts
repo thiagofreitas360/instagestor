@@ -1,5 +1,40 @@
 import { describe, expect, it } from "vitest";
-import { buildRecurringSlots, effectiveLoopLimits, nextLoopScheduleAt } from "@/server/automation";
+import { buildRecurringSlots, chooseLoopMedia, effectiveLoopLimits, nextLoopScheduleAt } from "@/server/automation";
+
+const pool = ["v1", "v2", "v3", "v4"].map((id, position) => ({
+  id: `rel-${id}`, media_asset_id: id, media_kind: "VIDEO" as const, position,
+}));
+const pick = (overrides: Partial<Parameters<typeof chooseLoopMedia>[0]>) => chooseLoopMedia({
+  media: pool, usedMediaIds: [], noRepeat: false, mediaType: "REELS", imageEveryN: 0, videosSinceImage: 0,
+  lastPostedToday: new Map(), usedByOthersToday: new Map(), random: () => 0, ...overrides,
+})?.selected.media_asset_id;
+
+describe("loop media choice", () => {
+  it("draws at random, skipping what the account posted today and what other accounts already took", () => {
+    const lastPostedToday = new Map([["v1", 1]]);
+    const usedByOthersToday = new Map([["v2", 1]]);
+    expect(pick({ lastPostedToday, usedByOthersToday, random: () => 0 })).toBe("v3");
+    expect(pick({ lastPostedToday, usedByOthersToday, random: () => 1 })).toBe("v4");
+  });
+
+  it("shares repeats evenly across accounts when there are fewer videos than accounts", () => {
+    expect(pick({ usedByOthersToday: new Map([["v1", 2], ["v2", 1], ["v3", 2], ["v4", 2]]) })).toBe("v2");
+  });
+
+  it("prefers repeating for another account over repeating on the same account", () => {
+    const lastPostedToday = new Map([["v1", 1], ["v2", 2], ["v3", 3]]);
+    expect(pick({ lastPostedToday, usedByOthersToday: new Map([["v4", 5]]) })).toBe("v4");
+  });
+
+  it("restarts with the earliest posted video once the pool is exhausted for the day", () => {
+    expect(pick({ lastPostedToday: new Map([["v1", 30], ["v2", 10], ["v3", 40], ["v4", 20]]) })).toBe("v2");
+  });
+
+  it("finishes a limited loop once every media was used by the account", () => {
+    expect(pick({ noRepeat: true, usedMediaIds: pool.map((item) => item.id) })).toBeUndefined();
+    expect(pick({ noRepeat: true, usedMediaIds: ["rel-v1", "rel-v2", "rel-v3"], lastPostedToday: new Map([["v4", 1]]) })).toBe("v4");
+  });
+});
 
 describe("automation scheduling", () => {
   it("moves the next loop job to the following local day after the daily limit", () => {
