@@ -5,8 +5,8 @@ test("renderiza o login com o layout visual esperado", async ({ page }) => {
   await page.goto("/login");
 
   await expect(page.locator(".login-shell")).toHaveCSS("display", "grid");
-  await expect(page.locator(".login-card")).toHaveCSS("background-color", "rgba(255, 255, 255, 0.96)");
-  await expect(page.getByRole("button", { name: "Entrar" })).toHaveCSS("background-color", "rgb(111, 78, 246)");
+  await expect(page.locator(".login-card")).toHaveCSS("background-color", "rgba(255, 255, 255, 0.02)");
+  await expect(page.getByRole("button", { name: "Entrar" })).toHaveCSS("background-color", "rgb(139, 92, 246)");
 });
 
 test("protege o painel, autentica o administrador e encerra a sessão", async ({ page }) => {
