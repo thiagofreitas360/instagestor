@@ -4,6 +4,7 @@ import { getSqlClient } from "@/db/client";
 import { EmptyState, formatDate, MessageBanner, PageHeader, Panel, StatusBadge, initials } from "@/components/ui";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { InstagramConnectButton } from "@/components/instagram-connect-button";
+import { AccountBulkSelection } from "@/components/account-bulk-selection";
 import { requireAdmin } from "@/server/auth";
 import { listMetaApps } from "@/server/meta-apps";
 
@@ -13,6 +14,7 @@ type AccountRow = {
   display_name: string | null;
   profile_picture_url: string | null;
   account_type: string | null;
+  is_new_account: boolean;
   status: string;
   token_expires_at: Date | null;
   publishing_limit_usage: number | null;
@@ -28,7 +30,7 @@ type AccountRow = {
 type GroupRow = { id: string; name: string };
 
 type PageProps = {
-  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[] }>;
+  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[] }>;
 };
 
 function first(value?: string | string[]) {
@@ -42,7 +44,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const [accounts, groups, apps] = await Promise.all([
     sql<AccountRow[]>`
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.account_type, account.status,
-        account.token_expires_at,
+        account.token_expires_at, account.is_new_account,
         account.last_error_at, account.last_error_message,
         account.publishing_limit_usage, account.publishing_limit_total,
         coalesce(array_agg(DISTINCT group_row.name ORDER BY group_row.name)
@@ -78,7 +80,9 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const selectedNiche = groups.some((group) => group.id === requestedNiche) ? requestedNiche : undefined;
   const search = (first(params.busca) ?? "").trim();
   const normalizedSearch = search.toLocaleLowerCase("pt-BR").replace(/^@/, "");
-  const filteredAccounts = accounts.filter((account) => {
+  const requestedType = first(params.tipo);
+  const selectedType = requestedType === "novas" || requestedType === "antigas" ? requestedType : "todas";
+  const matchingAccounts = accounts.filter((account) => {
     if (selectedNiche && !account.group_ids.includes(selectedNiche)) return false;
     if (normalizedSearch && !account.username.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
       && !account.display_name?.toLocaleLowerCase("pt-BR").includes(normalizedSearch)) return false;
@@ -89,6 +93,15 @@ export default async function AccountsPage({ searchParams }: PageProps) {
     if (selectedFilter === "banidas") return account.status === "BANNED";
     return true;
   });
+  const newCount = matchingAccounts.filter((account) => account.is_new_account).length;
+  const filteredAccounts = matchingAccounts.filter((account) => selectedType === "todas"
+    || account.is_new_account === (selectedType === "novas"));
+  const returnParams = new URLSearchParams({
+    ...(selectedFilter !== "todas" ? { filtro: selectedFilter } : {}),
+    ...(selectedType !== "todas" ? { tipo: selectedType } : {}),
+    ...(selectedNiche ? { nicho: selectedNiche } : {}), ...(search ? { busca: search } : {}),
+  });
+  const returnTo = `/contas${returnParams.size ? `?${returnParams}` : ""}`;
 
   return (
     <div className="page-stack">
@@ -115,7 +128,15 @@ export default async function AccountsPage({ searchParams }: PageProps) {
             {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
           </select>
         </label>
-        <button className="button button-secondary" type="submit">Aplicar nicho</button>
+        <label>
+          Tipo de conta
+          <select name="tipo" defaultValue={selectedType}>
+            <option value="todas">Todas ({matchingAccounts.length})</option>
+            <option value="novas">Novas ({newCount})</option>
+            <option value="antigas">Antigas ({matchingAccounts.length - newCount})</option>
+          </select>
+        </label>
+        <button className="button button-secondary" type="submit">Aplicar filtros</button>
       </form>
 
       <nav className="page-actions" aria-label="Filtrar contas">
@@ -133,6 +154,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
               ...(value === "todas" ? {} : { filtro: value }),
               ...(selectedNiche ? { nicho: selectedNiche } : {}),
               ...(search ? { busca: search } : {}),
+              ...(selectedType !== "todas" ? { tipo: selectedType } : {}),
             }).toString()}`.replace(/\?$/, "")}
             key={value}
           >
@@ -157,10 +179,12 @@ export default async function AccountsPage({ searchParams }: PageProps) {
 
       <Panel>
         {filteredAccounts.length ? (
+          <AccountBulkSelection key={`${returnTo}:${first(params.ok) ?? ""}:${filteredAccounts.map((account) => `${account.id}:${account.is_new_account}`).join(",")}`} returnTo={returnTo} total={filteredAccounts.length}>
           <div className="table-scroll">
             <table>
               <thead>
                 <tr>
+                  <th scope="col" className="account-select-cell"><input type="checkbox" data-select-all aria-label={`Selecionar todas as ${filteredAccounts.length} contas deste filtro`} /></th>
                   <th scope="col">Conta</th>
                   <th scope="col">Status</th>
                   <th scope="col">Limite de publicação</th>
@@ -176,6 +200,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                   const usagePercent = total ? Math.min(100, Math.round((usage / total) * 100)) : 0;
                   return (
                     <tr key={account.id}>
+                      <td data-label="Selecionar" className="account-select-cell"><input type="checkbox" name="accountIds" value={account.id} form="account-classification-form" aria-label={`Selecionar @${account.username}`} /></td>
                       <td data-label="Conta">
                         <Link className="account-cell" href={`/contas/${account.id}`}>
                           <span className="account-avatar" aria-hidden="true">
@@ -186,6 +211,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                           </span>
                           <span>
                             <strong>{account.display_name ?? `@${account.username}`}</strong>
+                            {account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
                             <small>
                               @{account.username}{account.account_type ? ` · ${account.account_type}` : ""}
                               {account.meta_app_name ? ` · via ${account.meta_app_name}` : ""}
@@ -243,6 +269,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
               </tbody>
             </table>
           </div>
+          </AccountBulkSelection>
         ) : (
           <EmptyState
             title={accounts.length ? "Nenhuma conta neste filtro" : "Nenhuma conta conectada"}

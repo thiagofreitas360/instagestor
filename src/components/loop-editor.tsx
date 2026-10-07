@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { formatBytes, initials } from "@/components/ui";
 
-type LoopAccount = { id: string; username: string; display_name: string | null; profile_picture_url: string | null };
+type LoopAccount = { id: string; username: string; display_name: string | null; profile_picture_url: string | null; is_new_account: boolean };
 type MediaType = "REELS" | "IMAGE" | "MIXED";
 type LoopAsset = {
   id: string;
@@ -63,6 +63,7 @@ export function LoopAccountPicker({
                 ) : initials(account.display_name ?? account.username)}
               </span>
               <span className="loop-account-name">@{account.username}</span>
+              {account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
               {isOutside ? (
                 <>
                   <small className="loop-note-off">fora do loop</small>

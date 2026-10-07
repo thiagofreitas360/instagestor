@@ -1,0 +1,1 @@
+ALTER TABLE "instagram_accounts" ADD COLUMN "is_new_account" boolean DEFAULT false NOT NULL;

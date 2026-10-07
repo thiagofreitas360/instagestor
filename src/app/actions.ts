@@ -6,7 +6,7 @@ import { headers } from "next/headers";
 import { z } from "zod";
 import { getSqlClient } from "@/db/client";
 import { authenticate, clearSession, clientAddressFromHeaders, requireAdmin, setSession } from "@/server/auth";
-import { banAccount, createFakeAccounts, disconnectAccount, requestInsightsRefresh, unbanAccount, verifyAccount } from "@/server/accounts";
+import { banAccount, createFakeAccounts, disconnectAccount, requestInsightsRefresh, setAccountsNewStatus, unbanAccount, verifyAccount } from "@/server/accounts";
 import { createCampaign, createGroup, deleteGroup, replaceGroupMembers, resolveTargetIds, updateGroup } from "@/server/campaigns";
 import { deleteMetaApp, saveMetaApp } from "@/server/meta-apps";
 import { createLoop, createSchedule, deleteLoop, deleteSchedule, setLoopStatus, updateLoop, updateSchedule } from "@/server/automation";
@@ -101,7 +101,36 @@ export async function verifyAccountAction(formData: FormData) {
 
 function safeReturnPath(value: FormDataEntryValue | null, fallback: string) {
   const path = typeof value === "string" ? value : "";
-  return /^\/(analises|contas)(\/|\?|$)/.test(path) ? path : fallback;
+  return /^\/(analises|contas)(\/|\?|$)/.test(path) && !path.includes("\\") ? path : fallback;
+}
+
+export async function setAccountsNewStatusAction(formData: FormData) {
+  const user = await requireAdmin();
+  const returnTo = safeReturnPath(formData.get("returnTo"), "/contas");
+  const destination = new URL(returnTo, "http://localhost");
+  destination.searchParams.delete("erro");
+  destination.searchParams.delete("ok");
+  let result: { changed: number; unchanged: number };
+  let accountIds: string[];
+  let isNewAccount: boolean;
+  try {
+    accountIds = z.array(id).min(1, "Selecione ao menos uma conta").parse(formData.getAll("accountIds"));
+    isNewAccount = z.enum(["true", "false"]).parse(formData.get("isNewAccount")) === "true";
+    result = await setAccountsNewStatus(accountIds, isNewAccount, user.id, user.organizationId);
+    revalidatePath("/contas");
+    revalidatePath("/loops");
+    revalidatePath("/fila");
+    for (const accountId of new Set(accountIds)) revalidatePath(`/contas/${accountId}`);
+  } catch (error) {
+    destination.searchParams.set("erro", error instanceof Error ? error.message : "Operação não concluída");
+    redirect(`${destination.pathname}${destination.search}`);
+  }
+  const count = result.changed;
+  const text = count
+    ? `${count} ${count === 1 ? "conta marcada" : "contas marcadas"} como ${isNewAccount ? (count === 1 ? "nova" : "novas") : (count === 1 ? "antiga" : "antigas")}${result.unchanged ? ` · ${result.unchanged} já estavam nessa classificação` : ""}`
+    : "Nenhuma conta precisava ser alterada";
+  destination.searchParams.set("ok", text);
+  redirect(`${destination.pathname}${destination.search}`);
 }
 
 export async function refreshInsightsAction(formData: FormData) {

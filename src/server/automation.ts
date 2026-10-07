@@ -211,21 +211,29 @@ export function nextLoopScheduleAt(input: {
   minIntervalMinutes: number;
   maxIntervalMinutes: number;
   random?: (minimum: number, maximum: number) => number;
+  now?: Date;
+  notBefore?: Date;
+  reschedule?: boolean;
 }) {
   const minutes = (input.random ?? randomMinutes)(input.minIntervalMinutes, input.maxIntervalMinutes);
+  const now = input.now ?? input.completedAt;
+  let scheduledAt = input.completedAt.getTime() + minutes * 60_000;
+  if (input.reschedule && scheduledAt <= now.getTime()) scheduledAt = now.getTime() + minutes * 60_000;
   if (input.publishedToday >= input.dailyLimit) {
-    return DateTime.fromJSDate(input.completedAt, { zone: "utc" })
+    const tomorrow = DateTime.fromJSDate(now, { zone: "utc" })
       .setZone(input.timezone)
       .plus({ days: 1 })
       .startOf("day")
       .plus({ minutes })
       .toUTC()
-      .toJSDate();
+      .toMillis();
+    scheduledAt = Math.max(scheduledAt, tomorrow);
   }
-  return new Date(input.completedAt.getTime() + minutes * 60_000);
+  return new Date(Math.max(scheduledAt, input.notBefore?.getTime() ?? scheduledAt));
 }
 
 export function effectiveLoopLimits(input: {
+  isNewAccount?: boolean;
   followerCount: number | null;
   tieredLimits: boolean;
   tierFollowerThreshold: number;
@@ -238,7 +246,7 @@ export function effectiveLoopLimits(input: {
 }) {
   const useTier = input.tieredLimits && input.followerCount !== null
     && input.followerCount <= input.tierFollowerThreshold;
-  return useTier ? {
+  const limits = useTier ? {
     dailyLimit: input.tier1DailyLimit,
     minIntervalMinutes: input.tier1MinIntervalMinutes,
     maxIntervalMinutes: input.tier1MaxIntervalMinutes,
@@ -247,6 +255,32 @@ export function effectiveLoopLimits(input: {
     minIntervalMinutes: input.minIntervalMinutes,
     maxIntervalMinutes: input.maxIntervalMinutes,
   };
+  const multiplier = input.isNewAccount ? 2 : 1;
+  return { ...limits, minIntervalMinutes: limits.minIntervalMinutes * multiplier, maxIntervalMinutes: limits.maxIntervalMinutes * multiplier };
+}
+
+export type LoopAccountLimitsRow = {
+  is_new_account: boolean;
+  followers_count: number | null;
+  tiered_limits: boolean;
+  tier_follower_threshold: number;
+  daily_limit_per_account: number;
+  min_interval_minutes: number;
+  max_interval_minutes: number;
+  tier1_daily_limit: number;
+  tier1_min_interval_minutes: number;
+  tier1_max_interval_minutes: number;
+};
+
+export function loopAccountLimits(row: LoopAccountLimitsRow) {
+  return effectiveLoopLimits({
+    isNewAccount: row.is_new_account, followerCount: row.followers_count,
+    tieredLimits: row.tiered_limits, tierFollowerThreshold: row.tier_follower_threshold,
+    dailyLimitPerAccount: row.daily_limit_per_account,
+    minIntervalMinutes: row.min_interval_minutes, maxIntervalMinutes: row.max_interval_minutes,
+    tier1DailyLimit: row.tier1_daily_limit,
+    tier1MinIntervalMinutes: row.tier1_min_interval_minutes, tier1MaxIntervalMinutes: row.tier1_max_interval_minutes,
+  });
 }
 
 function localDayBounds(date: Date, timezone: string) {
@@ -255,6 +289,94 @@ function localDayBounds(date: Date, timezone: string) {
     start: local.startOf("day").toUTC().toJSDate(),
     end: local.plus({ days: 1 }).startOf("day").toUTC().toJSDate(),
   };
+}
+
+async function loopScheduleAt(sql: TransactionSql, input: {
+  organizationId: string;
+  loopId: string;
+  accountId: string;
+  limits: ReturnType<typeof effectiveLoopLimits>;
+  timezone: string;
+  completedAt?: Date;
+  startAt?: Date;
+  reschedule?: boolean;
+}) {
+  const now = new Date();
+  const timezone = input.timezone;
+  const { start, end } = localDayBounds(now, timezone);
+  const [history] = await sql<Array<{ published: number; last_published_at: Date | null }>>`
+    SELECT count(*) FILTER (WHERE job.loop_id = ${input.loopId}
+        AND job.published_at >= ${start.toISOString()} AND job.published_at < ${end.toISOString()})::int AS published,
+      max(job.published_at) AS last_published_at
+    FROM publication_jobs job
+    JOIN campaigns campaign ON campaign.organization_id = job.organization_id AND campaign.id = job.campaign_id
+    WHERE job.organization_id = ${input.organizationId} AND job.instagram_account_id = ${input.accountId}
+      AND job.status = 'PUBLISHED' AND campaign.origin = 'LOOP'
+  `;
+  const completedAt = input.completedAt ?? history?.last_published_at;
+  if (!completedAt) return input.startAt ? new Date(input.startAt) : now;
+  return nextLoopScheduleAt({
+    completedAt: new Date(completedAt), now,
+    notBefore: input.reschedule ? now : new Date(Math.max(now.getTime(), input.startAt?.getTime() ?? 0)),
+    reschedule: input.reschedule, timezone,
+    publishedToday: history?.published ?? 0,
+    dailyLimit: input.limits.dailyLimit,
+    minIntervalMinutes: input.limits.minIntervalMinutes,
+    maxIntervalMinutes: input.limits.maxIntervalMinutes,
+  });
+}
+
+export async function reschedulePendingLoopJobs(sql: TransactionSql, organizationId: string, accountIds: string[]) {
+  const jobs = await sql<Array<LoopAccountLimitsRow & {
+    id: string; loop_id: string; instagram_account_id: string; status: string;
+    scheduled_at: Date; next_attempt_at: Date | null;
+  }>>`
+    SELECT job.id, job.loop_id, job.instagram_account_id, job.status, job.scheduled_at, job.next_attempt_at,
+      account.is_new_account, metrics.followers_count,
+      loop.tiered_limits, loop.tier_follower_threshold, loop.daily_limit_per_account,
+      loop.min_interval_minutes, loop.max_interval_minutes, loop.tier1_daily_limit,
+      loop.tier1_min_interval_minutes, loop.tier1_max_interval_minutes
+    FROM publication_jobs job
+    JOIN loop_accounts selected ON selected.organization_id = job.organization_id
+      AND selected.loop_id = job.loop_id AND selected.instagram_account_id = job.instagram_account_id
+    JOIN loops loop ON loop.organization_id = selected.organization_id AND loop.id = selected.loop_id
+    JOIN loop_account_state state ON state.organization_id = selected.organization_id
+      AND state.loop_id = selected.loop_id AND state.instagram_account_id = selected.instagram_account_id
+    JOIN instagram_accounts account ON account.organization_id = selected.organization_id AND account.id = selected.instagram_account_id
+    LEFT JOIN LATERAL (
+      SELECT followers_count FROM account_daily_metrics
+      WHERE organization_id = account.organization_id AND instagram_account_id = account.id AND followers_count IS NOT NULL
+      ORDER BY day DESC LIMIT 1
+    ) metrics ON true
+    WHERE job.organization_id = ${organizationId} AND job.instagram_account_id = ANY(${accountIds}::uuid[])
+      AND loop.status = 'ACTIVE' AND state.finished = false AND account.status IN ('CONNECTED', 'TOKEN_EXPIRING')
+      AND job.status IN ('DRAFT', 'QUEUED', 'RETRY_WAIT') AND job.locked_by IS NULL
+      AND (job.lock_expires_at IS NULL OR job.lock_expires_at <= now())
+    ORDER BY job.id FOR UPDATE OF job
+  `;
+  if (!jobs.length) return [];
+  const [preferences] = await sql<Array<{ default_timezone: string }>>`
+    SELECT default_timezone FROM settings WHERE organization_id = ${organizationId}
+  `;
+  const timezone = preferences?.default_timezone ?? "America/Sao_Paulo";
+  const changes = [];
+  for (const job of jobs) {
+    const scheduledAt = await loopScheduleAt(sql, {
+      organizationId, loopId: job.loop_id, accountId: job.instagram_account_id,
+      limits: loopAccountLimits(job), timezone, startAt: job.scheduled_at, reschedule: true,
+    });
+    const previousNextAttemptAt = job.next_attempt_at ? new Date(job.next_attempt_at) : null;
+    const nextAttemptAt = job.status === "RETRY_WAIT"
+      ? new Date(Math.max(scheduledAt.getTime(), previousNextAttemptAt?.getTime() ?? 0)) : previousNextAttemptAt;
+    await sql`
+      UPDATE publication_jobs SET scheduled_at = ${scheduledAt.toISOString()},
+        next_attempt_at = ${nextAttemptAt?.toISOString() ?? null}, updated_at = now()
+      WHERE organization_id = ${organizationId} AND id = ${job.id} AND status IN ('DRAFT', 'QUEUED', 'RETRY_WAIT')
+    `;
+    changes.push({ accountId: job.instagram_account_id, jobId: job.id,
+      previousScheduledAt: job.scheduled_at, scheduledAt, previousNextAttemptAt: job.next_attempt_at, nextAttemptAt });
+  }
+  return changes;
 }
 
 // Mídias são sorteadas, nunca seguem a ordem do pool. Regra principal: a conta não repete mídia no
@@ -310,23 +432,14 @@ export async function scheduleNextLoopJob(input: {
   return getSqlClient().begin(async (sql) => {
     // Serializa o agendamento por loop: contas agendadas juntas enxergam a mídia que as outras já pegaram.
     await sql`SELECT 1 FROM loops WHERE organization_id = ${input.organizationId} AND id = ${input.loopId} FOR UPDATE`;
-    const [state] = await sql<Array<{
+    const [state] = await sql<Array<LoopAccountLimitsRow & {
       campaign_id: string;
       status: "ACTIVE" | "PAUSED";
       media_type: AutomatedMediaType;
       image_every_n: number;
       no_repeat: boolean;
-      min_interval_minutes: number;
-      max_interval_minutes: number;
-      daily_limit_per_account: number;
       auto_comment_text: string;
       auto_comment_delay_minutes: number;
-      tiered_limits: boolean;
-      tier_follower_threshold: number;
-      tier1_daily_limit: number;
-      tier1_min_interval_minutes: number;
-      tier1_max_interval_minutes: number;
-      followers_count: number | null;
       used_media_ids: string[];
       videos_since_image: number;
       finished: boolean;
@@ -337,7 +450,7 @@ export async function scheduleNextLoopJob(input: {
         loop.auto_comment_text, loop.auto_comment_delay_minutes, loop.tiered_limits,
         loop.tier_follower_threshold, loop.tier1_daily_limit, loop.tier1_min_interval_minutes,
         loop.tier1_max_interval_minutes, metrics.followers_count,
-        state.used_media_ids, state.videos_since_image, state.finished, account.status AS account_status
+        state.used_media_ids, state.videos_since_image, state.finished, account.status AS account_status, account.is_new_account
       FROM loop_account_state state
       JOIN loops loop ON loop.organization_id = state.organization_id AND loop.id = state.loop_id
       JOIN loop_accounts selected_account ON selected_account.organization_id = state.organization_id
@@ -379,38 +492,7 @@ export async function scheduleNextLoopJob(input: {
       SELECT default_timezone FROM settings WHERE organization_id = ${input.organizationId}
     `;
     const timezone = preferences?.default_timezone ?? "America/Sao_Paulo";
-    let scheduledAt = input.runAt ?? input.startAt ?? new Date();
-    if (!input.runAt) {
-      const reference = input.completedAt ?? new Date();
-      const { start, end } = localDayBounds(reference, timezone);
-      const [count] = await sql<Array<{ published: number }>>`
-        SELECT count(*)::int AS published FROM publication_jobs
-        WHERE organization_id = ${input.organizationId} AND loop_id = ${input.loopId}
-          AND instagram_account_id = ${input.accountId} AND status = 'PUBLISHED'
-          AND published_at >= ${start.toISOString()} AND published_at < ${end.toISOString()}
-      `;
-      const limits = effectiveLoopLimits({
-        followerCount: state.followers_count,
-        tieredLimits: state.tiered_limits,
-        tierFollowerThreshold: state.tier_follower_threshold,
-        dailyLimitPerAccount: state.daily_limit_per_account,
-        minIntervalMinutes: state.min_interval_minutes,
-        maxIntervalMinutes: state.max_interval_minutes,
-        tier1DailyLimit: state.tier1_daily_limit,
-        tier1MinIntervalMinutes: state.tier1_min_interval_minutes,
-        tier1MaxIntervalMinutes: state.tier1_max_interval_minutes,
-      });
-      if (input.completedAt || (count?.published ?? 0) >= limits.dailyLimit) {
-        scheduledAt = nextLoopScheduleAt({
-          completedAt: reference,
-          timezone,
-          publishedToday: count?.published ?? 0,
-          dailyLimit: limits.dailyLimit,
-          minIntervalMinutes: limits.minIntervalMinutes,
-          maxIntervalMinutes: limits.maxIntervalMinutes,
-        });
-      }
-    }
+    const scheduledAt = input.runAt ?? await loopScheduleAt(sql, { ...input, timezone, limits: loopAccountLimits(state) });
 
     // "Hoje" é o dia local em que o job vai rodar: se o limite empurrou para amanhã, conta o uso de amanhã.
     const publishDay = localDayBounds(scheduledAt, timezone);

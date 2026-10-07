@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { TransactionSql } from "postgres";
+import { z } from "zod";
 import { getSqlClient } from "@/db/client";
 import { decryptToken, encryptToken, randomSecret, sha256 } from "@/lib/crypto";
 import { asInstagramError } from "@/lib/errors";
@@ -10,9 +11,46 @@ import { COMMENTS_SCOPE, INSIGHTS_SCOPE } from "@/providers/instagram";
 import { markAccountUnavailableIfCurrent } from "@/jobs/account-availability";
 import { audit } from "./auth";
 import { getMetaAppCredentials } from "./meta-apps";
+import { reschedulePendingLoopJobs } from "./automation";
 
 const FAKE_SCOPES = ["instagram_business_basic", "instagram_business_content_publish", INSIGHTS_SCOPE, COMMENTS_SCOPE];
 type Sql = TransactionSql;
+
+export async function setAccountsNewStatus(accountIds: string[], isNewAccount: boolean, actorUserId: string, organizationId: string) {
+  const ids = [...new Set(z.array(z.uuid()).min(1, "Selecione ao menos uma conta").parse(accountIds))].sort();
+  z.boolean().parse(isNewAccount);
+  return getSqlClient().begin(async (sql) => {
+    // Mesma ordem da edição de loop: contas antes dos loops, sempre ordenadas por ID.
+    const accounts = await sql<Array<{ id: string; is_new_account: boolean }>>`
+      SELECT id, is_new_account FROM instagram_accounts
+      WHERE organization_id = ${organizationId} AND id = ANY(${ids}::uuid[])
+      ORDER BY id FOR UPDATE
+    `;
+    if (accounts.length !== ids.length) throw new Error("Uma ou mais contas não existem ou pertencem a outro cliente");
+    const changed = accounts.filter((account) => account.is_new_account !== isNewAccount);
+    if (!changed.length) return { changed: 0, unchanged: ids.length };
+    const changedIds = changed.map((account) => account.id);
+    await sql`
+      SELECT loop.id FROM loops loop
+      WHERE loop.organization_id = ${organizationId} AND EXISTS (
+        SELECT 1 FROM loop_accounts selected WHERE selected.organization_id = loop.organization_id
+          AND selected.loop_id = loop.id AND selected.instagram_account_id = ANY(${changedIds}::uuid[])
+      ) ORDER BY loop.id FOR UPDATE OF loop
+    `;
+    await sql`
+      UPDATE instagram_accounts SET is_new_account = ${isNewAccount}, updated_at = now()
+      WHERE organization_id = ${organizationId} AND id = ANY(${changedIds}::uuid[])
+    `;
+    const jobs = await reschedulePendingLoopJobs(sql, organizationId, changedIds);
+    await sql`INSERT INTO audit_logs ${sql(changed.map((account) => ({
+      organization_id: organizationId, actor_user_id: actorUserId,
+      event_type: "ACCOUNT_NEW_STATUS_UPDATED", entity_type: "instagram_account", entity_id: account.id,
+      metadata_json: JSON.stringify({ previousValue: account.is_new_account, isNewAccount,
+        jobs: jobs.filter((job) => job.accountId === account.id) }),
+    })))}`;
+    return { changed: changed.length, unchanged: ids.length - changed.length };
+  });
+}
 
 export async function createFakeAccounts(count: number, actorUserId: string, organizationId: string) {
   const env = getEnv();

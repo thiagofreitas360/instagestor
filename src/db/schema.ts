@@ -173,6 +173,7 @@ export const instagramAccounts = pgTable(
     displayName: text("display_name"),
     profilePictureUrl: text("profile_picture_url"),
     accountType: text("account_type"),
+    isNewAccount: boolean("is_new_account").notNull().default(false),
     status: instagramAccountStatus("status").notNull().default("CONNECTED"),
     encryptedAccessToken: text("encrypted_access_token"),
     authorizedAt: timestamp("authorized_at", { withTimezone: true }).defaultNow().notNull(),

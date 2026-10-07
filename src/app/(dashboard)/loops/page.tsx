@@ -7,12 +7,16 @@ import { EmptyState, formatDate, MessageBanner, PageHeader } from "@/components/
 import { getSqlClient } from "@/db/client";
 import { requireAdmin } from "@/server/auth";
 import { getEnv } from "@/lib/env";
+import { loopAccountLimits } from "@/server/automation";
 
 type Account = {
   id: string;
   username: string;
   display_name: string | null;
   profile_picture_url: string | null;
+  status: string;
+  is_new_account: boolean;
+  followers_count: number | null;
   assigned_loop_ids: string[];
 };
 type Media = { id: string; original_filename: string; media_kind: "IMAGE" | "VIDEO"; folder_id: string | null; folder_name: string | null };
@@ -80,12 +84,15 @@ export default async function LoopsPage({ searchParams }: PageProps) {
   const query = await searchParams;
   const [accounts, media, folders, allLoops] = await Promise.all([
     getSqlClient()<Account[]>`
-      SELECT account.id, account.username, account.display_name, account.profile_picture_url,
+      SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.status, account.is_new_account,
+        (SELECT followers_count FROM account_daily_metrics metrics
+          WHERE metrics.organization_id = account.organization_id AND metrics.instagram_account_id = account.id
+            AND followers_count IS NOT NULL ORDER BY day DESC LIMIT 1) AS followers_count,
         ARRAY(SELECT selected.loop_id::text FROM loop_accounts selected
           WHERE selected.organization_id = account.organization_id
             AND selected.instagram_account_id = account.id) AS assigned_loop_ids
       FROM instagram_accounts account
-      WHERE account.organization_id = ${user.organizationId} AND account.status IN ('CONNECTED', 'TOKEN_EXPIRING')
+      WHERE account.organization_id = ${user.organizationId}
       ORDER BY account.username
     `,
     getSqlClient()<Media[]>`
@@ -155,9 +162,10 @@ export default async function LoopsPage({ searchParams }: PageProps) {
   const loops = allLoops.filter((loop) => loop.no_repeat === (mode === "limitados"));
   const editing = allLoops.find((loop) => loop.id === first(query.editar));
   const creating = !editing && first(query.novo) === "1";
-  const freeAccounts = accounts.filter((account) => account.assigned_loop_ids.length === 0);
+  const availableAccounts = accounts.filter((account) => ["CONNECTED", "TOKEN_EXPIRING"].includes(account.status));
+  const freeAccounts = availableAccounts.filter((account) => account.assigned_loop_ids.length === 0);
   const selectableAccounts = editing
-    ? accounts.filter((account) => account.assigned_loop_ids.length === 0 || account.assigned_loop_ids.includes(editing.id))
+    ? availableAccounts.filter((account) => account.assigned_loop_ids.length === 0 || account.assigned_loop_ids.includes(editing.id))
     : freeAccounts;
   const canCreate = freeAccounts.length > 0;
 
@@ -284,6 +292,21 @@ export default async function LoopsPage({ searchParams }: PageProps) {
                       {loop.account_usernames.length > VISIBLE_CHIPS ? <span>+{loop.account_usernames.length - VISIBLE_CHIPS}</span> : null}
                     </div>
                   ) : null}
+                  <details className="loop-account-intervals">
+                    <summary>Intervalos por conta ({loop.account_ids.length})</summary>
+                    <ul>
+                      {loop.account_ids.map((accountId) => {
+                        const account = accounts.find((candidate) => candidate.id === accountId);
+                        if (!account) return null;
+                        const limits = loopAccountLimits({ ...loop, ...account });
+                        return <li key={account.id}>
+                          <span>@{account.username}</span>
+                          {account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
+                          <span>{limits.minIntervalMinutes}–{limits.maxIntervalMinutes} min · limite {limits.dailyLimit}/dia</span>
+                        </li>;
+                      })}
+                    </ul>
+                  </details>
                   <div className="loop-card-stats">
                     <span className="loop-stat-published">{loop.published_count} publicados hoje</span>
                     {" · "}

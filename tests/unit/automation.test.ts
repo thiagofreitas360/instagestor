@@ -37,6 +37,30 @@ describe("loop media choice", () => {
 });
 
 describe("automation scheduling", () => {
+  it("doubles both intervals after selecting the follower tier and keeps the daily limit", () => {
+    const input = { followerCount: null, tieredLimits: true, tierFollowerThreshold: 10000,
+      dailyLimitPerAccount: 24, minIntervalMinutes: 50, maxIntervalMinutes: 60,
+      tier1DailyLimit: 10, tier1MinIntervalMinutes: 60, tier1MaxIntervalMinutes: 120 };
+    expect(effectiveLoopLimits(input)).toEqual({ dailyLimit: 24, minIntervalMinutes: 50, maxIntervalMinutes: 60 });
+    expect(effectiveLoopLimits({ ...input, isNewAccount: true })).toEqual({ dailyLimit: 24, minIntervalMinutes: 100, maxIntervalMinutes: 120 });
+    expect(effectiveLoopLimits({ ...input, isNewAccount: true, followerCount: 500 })).toEqual({ dailyLimit: 10, minIntervalMinutes: 120, maxIntervalMinutes: 240 });
+    expect(effectiveLoopLimits({ ...input, isNewAccount: true, minIntervalMinutes: 1440, maxIntervalMinutes: 1440 }).maxIntervalMinutes).toBe(2880);
+  });
+
+  it("does not shorten a long interval when the daily limit moves publication past midnight", () => {
+    const completedAt = new Date("2026-10-04T02:50:00.000Z");
+    expect(nextLoopScheduleAt({ completedAt, timezone: "America/Sao_Paulo", publishedToday: 24,
+      dailyLimit: 24, minIntervalMinutes: 120, maxIntervalMinutes: 120 }).getTime() - completedAt.getTime()).toBeGreaterThanOrEqual(120 * 60000);
+  });
+
+  it("starts a full interval from the change when the recalculated time has already passed", () => {
+    const completedAt = new Date("2026-10-07T13:00:00Z");
+    const now = new Date("2026-10-07T14:10:00Z");
+    const input = { completedAt, now, reschedule: true, timezone: "America/Sao_Paulo",
+      publishedToday: 1, dailyLimit: 24, minIntervalMinutes: 60, maxIntervalMinutes: 60 };
+    expect(nextLoopScheduleAt(input).toISOString()).toBe("2026-10-07T15:10:00.000Z");
+    expect(nextLoopScheduleAt({ ...input, now: new Date("2026-10-07T13:30:00Z") }).toISOString()).toBe("2026-10-07T14:00:00.000Z");
+  });
   it("moves the next loop job to the following local day after the daily limit", () => {
     const scheduledAt = nextLoopScheduleAt({
       completedAt: new Date("2026-10-04T02:50:00.000Z"),

@@ -63,12 +63,14 @@ describe("OAuth com reconexão direcionada", () => {
     expect(untouched.encrypted_access_token).toBeNull();
 
     metaReturns(expected.instagram_user_id);
+    await getSqlClient()`UPDATE instagram_accounts SET is_new_account = true WHERE id = ${expected.id}`;
     const rightState = await createOauthState(TEST_ORGANIZATION_ID, userId, expected.id);
     await expect(connectFromAuthorizationCode("code", rightState)).resolves.toBe(expected.id);
-    const [reconnected] = await getSqlClient()<{ encrypted_access_token: string }[]>`
-      SELECT encrypted_access_token FROM instagram_accounts WHERE id = ${expected.id}
+    const [reconnected] = await getSqlClient()<{ encrypted_access_token: string; is_new_account: boolean }[]>`
+      SELECT encrypted_access_token, is_new_account FROM instagram_accounts WHERE id = ${expected.id}
     `;
     expect(decryptToken(reconnected.encrypted_access_token)).toBe(`token-${expected.instagram_user_id}`);
+    expect(reconnected.is_new_account).toBe(true);
   });
 
   it("permite várias contas na mesma organização e recusa conta de outro cliente", async () => {
