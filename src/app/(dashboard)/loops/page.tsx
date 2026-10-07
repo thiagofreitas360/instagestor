@@ -166,7 +166,7 @@ export default async function LoopsPage({ searchParams }: PageProps) {
       <PageHeader
         eyebrow="Automação"
         title="Loops"
-        actions={canCreate ? <Link className="button button-primary" href={`${href({ novo: "1" })}#editar-loop`}>Novo loop</Link> : undefined}
+        actions={<Link className="button button-primary" href={`${href({ novo: "1" })}#editar-loop`}>Novo loop</Link>}
       />
       {/* Atualizar com o editor aberto atrapalharia a edição. */}
       {editing || creating ? null : <AutoRefresh intervalMs={15_000} />}
