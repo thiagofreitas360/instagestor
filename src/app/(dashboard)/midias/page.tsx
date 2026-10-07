@@ -9,6 +9,7 @@ import {
 import { getSqlClient } from "@/db/client";
 import { EmptyState, formatBytes, formatDate, MessageBanner, PageHeader, Panel, StatusBadge } from "@/components/ui";
 import { MediaUploadForm } from "@/components/media-upload-form";
+import { MediaBulkSelection } from "@/components/media-bulk-selection";
 import { getEnv } from "@/lib/env";
 import { getPrivateMediaUrl } from "@/providers/storage";
 import { requireAdmin } from "@/server/auth";
@@ -132,6 +133,12 @@ export default async function MediaPage({ searchParams }: PageProps) {
       </Panel>
 
       {filteredMedia.length ? (
+        <MediaBulkSelection
+          key={`${selectedFolder ?? "all"}:${first(query.ok) ?? ""}:${first(query.erro) ?? ""}:${filteredMedia.map((asset) => `${asset.id}:${asset.folder_id}`).join(",")}`}
+          folders={folders.map(({ id, name }) => ({ id, name }))}
+          returnTo={selectedFolder ? `/midias?pasta=${selectedFolder}` : "/midias"}
+          total={filteredMedia.length}
+        >
         <section className="media-grid" aria-label="Arquivos da biblioteca">
           {mediaWithUrls.map((asset) => (
             <article className="media-card" key={asset.id}>
@@ -148,6 +155,10 @@ export default async function MediaPage({ searchParams }: PageProps) {
                 )}
               </div>
               <div className="media-card-body">
+                <label className="media-selection-checkbox">
+                  <input type="checkbox" name="mediaIds" value={asset.id} form="media-bulk-form" aria-label={`Selecionar ${asset.original_filename}`} />
+                  Selecionar
+                </label>
                 <div className="media-card-heading">
                   <h2 title={asset.original_filename}>{asset.original_filename}</h2>
                   <StatusBadge status={asset.processing_status} />
@@ -182,6 +193,7 @@ export default async function MediaPage({ searchParams }: PageProps) {
             </article>
           ))}
         </section>
+        </MediaBulkSelection>
       ) : (
         <Panel>
           <EmptyState

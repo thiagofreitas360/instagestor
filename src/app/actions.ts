@@ -347,6 +347,30 @@ export async function moveMediaAction(formData: FormData) {
   }
 }
 
+export async function bulkMediaAction(formData: FormData) {
+  const user = await requireAdmin();
+  const returnTo = String(formData.get("returnTo") ?? "");
+  const destination = new URL(/^\/midias(?:\?|$)/.test(returnTo) && !returnTo.includes("\\") ? returnTo : "/midias", "http://localhost");
+  destination.searchParams.delete("erro");
+  destination.searchParams.delete("ok");
+  try {
+    const mediaIds = z.array(id).min(1, "Selecione ao menos uma mídia").parse(formData.getAll("mediaIds"));
+    const operation = z.enum(["move", "delete"]).parse(formData.get("operation"));
+    const folderId = z.union([id, z.literal("")]).parse(formData.get("folderId") ?? "") || null;
+    const count = operation === "move"
+      ? await moveMedia(mediaIds, folderId, user.id, user.organizationId)
+      : await deleteMedia(mediaIds, user.id, user.organizationId);
+    revalidatePath("/midias");
+    const text = operation === "move"
+      ? `${count} ${count === 1 ? "mídia movida" : "mídias movidas"}`
+      : `${count} ${count === 1 ? "mídia excluída" : "mídias excluídas"}`;
+    destination.searchParams.set("ok", text);
+  } catch (error) {
+    destination.searchParams.set("erro", error instanceof Error ? error.message : "Operação não concluída");
+  }
+  redirect(`${destination.pathname}${destination.search}`);
+}
+
 export async function createCampaignAction(formData: FormData) {
   const user = await requireAdmin();
   try {

@@ -109,54 +109,62 @@ export async function deleteMediaFolder(folderId: string, actorUserId: string, o
   });
 }
 
-export async function moveMedia(assetId: string, folderId: string | null, actorUserId: string, organizationId: string) {
-  await getSqlClient().begin(async (sql) => {
+export async function moveMedia(assetId: string | string[], folderId: string | null, actorUserId: string, organizationId: string) {
+  const assetIds = [...new Set(Array.isArray(assetId) ? assetId : [assetId])];
+  if (!assetIds.length) throw new Error("Selecione ao menos uma mídia");
+  return getSqlClient().begin(async (sql) => {
     if (folderId) {
       const folder = await sql`SELECT id FROM media_folders WHERE organization_id = ${organizationId} AND id = ${folderId}`;
       if (!folder.length) throw new Error("Pasta de mídia não encontrada");
     }
-    const [asset] = await sql<Array<{ folder_id: string | null }>>`
-      SELECT folder_id FROM media_assets
-      WHERE organization_id = ${organizationId} AND id = ${assetId} AND deleted_at IS NULL
+    const assets = await sql<Array<{ id: string; folder_id: string | null }>>`
+      SELECT id, folder_id FROM media_assets
+      WHERE organization_id = ${organizationId} AND id IN ${sql(assetIds)} AND deleted_at IS NULL
+      ORDER BY id
       FOR UPDATE
     `;
-    if (!asset) throw new Error("Mídia não encontrada");
-    if (asset.folder_id !== folderId) {
+    if (assets.length !== assetIds.length) throw new Error("Mídia não encontrada");
+    const changedIds = assets.filter((asset) => asset.folder_id !== folderId).map((asset) => asset.id);
+    if (changedIds.length) {
       const [loop] = await sql<Array<{ name: string }>>`
         SELECT loop.name FROM loop_media selected
         JOIN loops loop ON loop.organization_id = selected.organization_id AND loop.id = selected.loop_id
-        WHERE selected.organization_id = ${organizationId} AND selected.media_asset_id = ${assetId}
+        WHERE selected.organization_id = ${organizationId} AND selected.media_asset_id IN ${sql(changedIds)}
         ORDER BY loop.created_at LIMIT 1
       `;
       if (loop) throw new Error(`A mídia é usada pelo loop "${loop.name}" e não pode ser movida`);
     }
     const moved = await sql`
       UPDATE media_assets SET folder_id = ${folderId}, updated_at = now()
-      WHERE organization_id = ${organizationId} AND id = ${assetId} AND deleted_at IS NULL RETURNING id
+      WHERE organization_id = ${organizationId} AND id IN ${sql(assetIds)} AND deleted_at IS NULL RETURNING id
     `;
-    if (!moved.length) throw new Error("Mídia não encontrada");
     await sql`
       INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id, metadata_json)
-      VALUES (${organizationId}, ${actorUserId}, 'MEDIA_MOVED', 'media_asset', ${assetId},
-        jsonb_build_object('folderId', ${folderId}))
+      SELECT organization_id, ${actorUserId}, 'MEDIA_MOVED', 'media_asset', id,
+        ${JSON.stringify({ folderId })}::jsonb
+      FROM media_assets WHERE organization_id = ${organizationId} AND id IN ${sql(assetIds)}
     `;
+    return moved.length;
   });
 }
 
-export async function deleteMedia(assetId: string, actorUserId: string, organizationId: string) {
-  const asset = await getSqlClient().begin(async (sql) => {
-    const [asset] = await sql<Array<{ id: string; storage_key: string; storage_provider: "LOCAL" | "S3" }>>`
+export async function deleteMedia(assetId: string | string[], actorUserId: string, organizationId: string) {
+  const assetIds = [...new Set(Array.isArray(assetId) ? assetId : [assetId])];
+  if (!assetIds.length) throw new Error("Selecione ao menos uma mídia");
+  const assets = await getSqlClient().begin(async (sql) => {
+    const assets = await sql<Array<{ id: string; storage_key: string; storage_provider: "LOCAL" | "S3" }>>`
       SELECT id, storage_key, storage_provider
       FROM media_assets
-      WHERE organization_id = ${organizationId} AND id = ${assetId} AND deleted_at IS NULL
+      WHERE organization_id = ${organizationId} AND id IN ${sql(assetIds)} AND deleted_at IS NULL
+      ORDER BY id
       FOR UPDATE
     `;
-    if (!asset) throw new Error("Mídia não encontrada");
+    if (assets.length !== assetIds.length) throw new Error("Mídia não encontrada");
     const [usage] = await sql<Array<{ campaign_count: number; loop_count: number; schedule_count: number }>>`
       SELECT
-        (SELECT count(*)::int FROM campaign_media WHERE organization_id = ${organizationId} AND media_asset_id = ${assetId}) AS campaign_count,
-        (SELECT count(*)::int FROM loop_media WHERE organization_id = ${organizationId} AND media_asset_id = ${assetId}) AS loop_count,
-        (SELECT count(*)::int FROM schedule_media WHERE organization_id = ${organizationId} AND media_asset_id = ${assetId}) AS schedule_count
+        (SELECT count(*)::int FROM campaign_media WHERE organization_id = ${organizationId} AND media_asset_id IN ${sql(assetIds)}) AS campaign_count,
+        (SELECT count(*)::int FROM loop_media WHERE organization_id = ${organizationId} AND media_asset_id IN ${sql(assetIds)}) AS loop_count,
+        (SELECT count(*)::int FROM schedule_media WHERE organization_id = ${organizationId} AND media_asset_id IN ${sql(assetIds)}) AS schedule_count
     `;
     if (usage.loop_count > 0) throw new Error("Mídia usada por loop não pode ser excluída");
     if (usage.schedule_count > 0) throw new Error("Mídia usada por escala não pode ser excluída");
@@ -164,21 +172,25 @@ export async function deleteMedia(assetId: string, actorUserId: string, organiza
 
     await sql`
       UPDATE media_assets SET processing_status = 'DELETED', deleted_at = now(), updated_at = now()
-      WHERE organization_id = ${organizationId} AND id = ${assetId}
+      WHERE organization_id = ${organizationId} AND id IN ${sql(assetIds)}
     `;
     await sql`
       INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id)
-      VALUES (${organizationId}, ${actorUserId}, 'MEDIA_DELETED', 'media_asset', ${assetId})
+      SELECT organization_id, ${actorUserId}, 'MEDIA_DELETED', 'media_asset', id
+      FROM media_assets WHERE organization_id = ${organizationId} AND id IN ${sql(assetIds)}
     `;
-    return asset;
+    return assets;
   });
-  try {
-    await getStorageProvider(asset.storage_provider).delete(asset.storage_key);
-  } catch (error) {
-    log("warn", "media", "deleted_object_cleanup_failed", {
-      media_id: asset.id,
-      storage_provider: asset.storage_provider,
-      error: error instanceof Error ? error.message : "unknown",
-    });
+  for (const asset of assets) {
+    try {
+      await getStorageProvider(asset.storage_provider).delete(asset.storage_key);
+    } catch (error) {
+      log("warn", "media", "deleted_object_cleanup_failed", {
+        media_id: asset.id,
+        storage_provider: asset.storage_provider,
+        error: error instanceof Error ? error.message : "unknown",
+      });
+    }
   }
+  return assets.length;
 }
