@@ -845,6 +845,7 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--brand); 
   box-shadow: 0 0 0 3px var(--ring-subtle);
 }
 [data-theme="DARK"] :is(input::placeholder, textarea::placeholder) { color: rgb(255 255 255 / 0.35); }
+[data-theme="DARK"] :is(option, optgroup) { background: #111111; color: var(--text); }
 [data-theme="DARK"] :is(.form-section > legend, .choice-grid legend, .loop-accounts legend, .loop-section-label) { color: var(--text-soft); }
 [data-theme="DARK"] :is(.form-hint, .optional-label, .muted, .breadcrumbs) { color: var(--text-faint); }
 
