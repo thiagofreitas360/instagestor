@@ -4,14 +4,20 @@ import { getSqlClient } from "@/db/client";
 import { claimJob, processClaimedJob } from "@/jobs/queue";
 import { encryptToken } from "@/lib/crypto";
 import {
-  createLoop, createSchedule, deleteLoop, scheduleNextLoopJob, setLoopStatus, updateLoop, updateSchedule,
+  createLoop, createSchedule, deleteLoop, scheduleNextLoopJob, setLoopStatus, updateLoop, updateSchedule, type LoopInput,
 } from "@/server/automation";
 import { disconnectAccount } from "@/server/accounts";
+import { deleteMediaFolder } from "@/server/media";
 import { createAccounts, createOrganization, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 async function createMedia(kind: "IMAGE" | "VIDEO", count: number, organizationId = TEST_ORGANIZATION_ID) {
   const sql = getSqlClient();
-  return sql<Array<{ id: string }>>`
+  const [folder] = await sql<Array<{ id: string }>>`
+    INSERT INTO media_folders (organization_id, name)
+    VALUES (${organizationId}, ${`Automação ${randomUUID()}`})
+    RETURNING id
+  `;
+  return sql<Array<{ id: string; folder_id: string }>>`
     INSERT INTO media_assets ${sql(Array.from({ length: count }, (_, index) => ({
       organization_id: organizationId,
       original_filename: `${kind.toLowerCase()}-${index}`,
@@ -21,13 +27,117 @@ async function createMedia(kind: "IMAGE" | "VIDEO", count: number, organizationI
       media_kind: kind,
       size_bytes: 1024,
       checksum_sha256: randomUUID().replaceAll("-", "").repeat(2),
+      folder_id: folder.id,
       processing_status: "READY",
     })))}
-    RETURNING id
+    RETURNING id, folder_id
   `;
 }
 
+function loopInput(input: {
+  actorUserId: string;
+  name: string;
+  accountIds: string[];
+  media: Array<{ id: string; folder_id: string }>;
+}): LoopInput {
+  return {
+    organizationId: TEST_ORGANIZATION_ID,
+    actorUserId: input.actorUserId,
+    name: input.name,
+    minIntervalMinutes: 25,
+    maxIntervalMinutes: 60,
+    dailyLimitPerAccount: 10,
+    autoCommentDelayMinutes: 5,
+    tieredLimits: false,
+    tierFollowerThreshold: 10000,
+    tier1DailyLimit: 10,
+    tier1MinIntervalMinutes: 60,
+    tier1MaxIntervalMinutes: 120,
+    mediaType: "REELS",
+    mediaFolderId: input.media[0].folder_id,
+    imageEveryN: 1,
+    noRepeat: false,
+    accountIds: input.accountIds,
+    mediaIds: input.media.map((asset) => asset.id),
+  };
+}
+
 describe("loops", () => {
+  it("keeps accounts exclusive between loops and releases them when removed or deleted", async () => {
+    const actorUserId = await createUser("exclusive-loop@example.test");
+    const accounts = await createAccounts(2, "exclusive_loop");
+    const firstMedia = await createMedia("VIDEO", 1);
+    const secondMedia = await createMedia("VIDEO", 1);
+    const first = await createLoop(loopInput({
+      actorUserId,
+      name: "Loop original",
+      accountIds: accounts.map((account) => account.id),
+      media: firstMedia,
+    }));
+
+    await expect(createLoop(loopInput({
+      actorUserId,
+      name: "Loop conflitante",
+      accountIds: [accounts[0].id],
+      media: secondMedia,
+    }))).rejects.toThrow(/já pertence ao loop "Loop original"/);
+
+    await updateLoop(first.loopId, loopInput({
+      actorUserId,
+      name: "Loop original",
+      accountIds: [accounts[1].id],
+      media: firstMedia,
+    }));
+    const second = await createLoop(loopInput({
+      actorUserId,
+      name: "Loop secundário",
+      accountIds: [accounts[0].id],
+      media: secondMedia,
+    }));
+    await setLoopStatus(second.loopId, "PAUSED", actorUserId, TEST_ORGANIZATION_ID);
+    await expect(createLoop(loopInput({
+      actorUserId,
+      name: "Loop ainda conflitante",
+      accountIds: [accounts[0].id],
+      media: firstMedia,
+    }))).rejects.toThrow(/Loop secundário/);
+
+    await deleteLoop(second.loopId, actorUserId, TEST_ORGANIZATION_ID);
+    await expect(createLoop(loopInput({
+      actorUserId,
+      name: "Loop liberado",
+      accountIds: [accounts[0].id],
+      media: secondMedia,
+    }))).resolves.toMatchObject({ scheduledCount: 1 });
+  });
+
+  it("accepts only media from the selected folder and protects folders in use", async () => {
+    const actorUserId = await createUser("folder-loop@example.test");
+    const [account] = await createAccounts(1, "folder_loop");
+    const selectedMedia = await createMedia("VIDEO", 1);
+    const otherMedia = await createMedia("VIDEO", 1);
+    const invalid = loopInput({ actorUserId, name: "Pasta inválida", accountIds: [account.id], media: otherMedia });
+    invalid.mediaFolderId = selectedMedia[0].folder_id;
+    await expect(createLoop(invalid)).rejects.toThrow(/pasta selecionada/);
+
+    await createLoop(loopInput({ actorUserId, name: "Pasta válida", accountIds: [account.id], media: selectedMedia }));
+    await expect(deleteMediaFolder(selectedMedia[0].folder_id, actorUserId, TEST_ORGANIZATION_ID))
+      .rejects.toThrow(/usada pelo loop "Pasta válida"/);
+  });
+
+  it("allows only one concurrent loop to claim an account", async () => {
+    const actorUserId = await createUser("concurrent-loop@example.test");
+    const [account] = await createAccounts(1, "concurrent_loop");
+    const firstMedia = await createMedia("VIDEO", 1);
+    const secondMedia = await createMedia("VIDEO", 1);
+    const results = await Promise.allSettled([
+      createLoop(loopInput({ actorUserId, name: "Concorrente A", accountIds: [account.id], media: firstMedia })),
+      createLoop(loopInput({ actorUserId, name: "Concorrente B", accountIds: [account.id], media: secondMedia })),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+  });
+
   it("runs a limited pool once per account without repetition", async () => {
     const sql = getSqlClient();
     const actorUserId = await createUser("limited-loop@example.test");
@@ -47,6 +157,7 @@ describe("loops", () => {
       tier1MinIntervalMinutes: 60,
       tier1MaxIntervalMinutes: 120,
       mediaType: "REELS",
+      mediaFolderId: media[0].folder_id,
       imageEveryN: 1,
       noRepeat: true,
       accountIds: [account.id],
@@ -103,6 +214,7 @@ describe("loops", () => {
       tier1MinIntervalMinutes: 60,
       tier1MaxIntervalMinutes: 120,
       mediaType: "REELS",
+      mediaFolderId: media[0].folder_id,
       imageEveryN: 1,
       noRepeat: false,
       accountIds: accounts.map((account) => account.id),
@@ -141,6 +253,7 @@ describe("loops", () => {
       tier1MinIntervalMinutes: 60,
       tier1MaxIntervalMinutes: 120,
       mediaType: "REELS",
+      mediaFolderId: media[0].folder_id,
       imageEveryN: 1,
       noRepeat: false,
       accountIds: accounts.map((account) => account.id),
@@ -179,6 +292,7 @@ describe("loops", () => {
       tier1MinIntervalMinutes: 60,
       tier1MaxIntervalMinutes: 120,
       mediaType: "REELS",
+      mediaFolderId: media[0].folder_id,
       imageEveryN: 1,
       noRepeat: false,
       accountIds: [account.id],
@@ -219,6 +333,7 @@ describe("loops", () => {
       tier1MinIntervalMinutes: 60,
       tier1MaxIntervalMinutes: 120,
       mediaType: "REELS",
+      mediaFolderId: media.folder_id,
       imageEveryN: 1,
       noRepeat: false,
       accountIds: [foreignAccount.id],
@@ -245,6 +360,7 @@ describe("loops", () => {
       tier1MinIntervalMinutes: 60,
       tier1MaxIntervalMinutes: 120,
       mediaType: "REELS",
+      mediaFolderId: media.folder_id,
       imageEveryN: 1,
       noRepeat: false,
       accountIds: [account.id],
@@ -278,6 +394,7 @@ describe("loops", () => {
       tier1MinIntervalMinutes: 60,
       tier1MaxIntervalMinutes: 120,
       mediaType: "REELS",
+      mediaFolderId: media[0].folder_id,
       imageEveryN: 1,
       noRepeat: false,
       accountIds: [accounts[0].id],
@@ -297,6 +414,7 @@ describe("loops", () => {
       tier1MinIntervalMinutes: 60,
       tier1MaxIntervalMinutes: 120,
       mediaType: "REELS",
+      mediaFolderId: media[0].folder_id,
       imageEveryN: 1,
       noRepeat: true,
       accountIds: [accounts[1].id],
@@ -342,6 +460,7 @@ describe("loops", () => {
       tier1MinIntervalMinutes: 60,
       tier1MaxIntervalMinutes: 60,
       mediaType: "REELS",
+      mediaFolderId: media.folder_id,
       imageEveryN: 1,
       noRepeat: false,
       accountIds: [account.id],

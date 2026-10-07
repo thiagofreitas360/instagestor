@@ -8,13 +8,22 @@ import { getSqlClient } from "@/db/client";
 import { requireAdmin } from "@/server/auth";
 import { getEnv } from "@/lib/env";
 
-type Account = { id: string; username: string; display_name: string | null; profile_picture_url: string | null };
-type Media = { id: string; original_filename: string; media_kind: "IMAGE" | "VIDEO"; folder_name: string | null };
+type Account = {
+  id: string;
+  username: string;
+  display_name: string | null;
+  profile_picture_url: string | null;
+  assigned_loop_ids: string[];
+};
+type Media = { id: string; original_filename: string; media_kind: "IMAGE" | "VIDEO"; folder_id: string | null; folder_name: string | null };
+type Folder = { id: string; name: string; media_count: number };
 type LoopRow = {
   id: string;
   name: string;
   status: "ACTIVE" | "PAUSED";
   media_type: "REELS" | "IMAGE" | "MIXED";
+  media_folder_id: string | null;
+  media_folder_name: string | null;
   no_repeat: boolean;
   default_caption: string;
   auto_comment_text: string;
@@ -69,25 +78,39 @@ export default async function LoopsPage({ searchParams }: PageProps) {
   const env = getEnv();
   const commentsAvailable = env.INSTAGRAM_PROVIDER !== "meta";
   const query = await searchParams;
-  const [accounts, media, allLoops] = await Promise.all([
+  const [accounts, media, folders, allLoops] = await Promise.all([
     getSqlClient()<Account[]>`
-      SELECT id, username, display_name, profile_picture_url FROM instagram_accounts
-      WHERE organization_id = ${user.organizationId} AND status IN ('CONNECTED', 'TOKEN_EXPIRING')
-      ORDER BY username
+      SELECT account.id, account.username, account.display_name, account.profile_picture_url,
+        ARRAY(SELECT selected.loop_id::text FROM loop_accounts selected
+          WHERE selected.organization_id = account.organization_id
+            AND selected.instagram_account_id = account.id) AS assigned_loop_ids
+      FROM instagram_accounts account
+      WHERE account.organization_id = ${user.organizationId} AND account.status IN ('CONNECTED', 'TOKEN_EXPIRING')
+      ORDER BY account.username
     `,
     getSqlClient()<Media[]>`
-      SELECT asset.id, asset.original_filename, asset.media_kind, folder.name AS folder_name
+      SELECT asset.id, asset.original_filename, asset.media_kind, asset.folder_id, folder.name AS folder_name
       FROM media_assets asset
       LEFT JOIN media_folders folder ON folder.organization_id = asset.organization_id AND folder.id = asset.folder_id
       WHERE asset.organization_id = ${user.organizationId}
         AND asset.processing_status = 'READY' AND asset.deleted_at IS NULL
       ORDER BY asset.created_at DESC
     `,
+    getSqlClient()<Folder[]>`
+      SELECT folder.id, folder.name,
+        count(asset.id) FILTER (WHERE asset.processing_status = 'READY' AND asset.deleted_at IS NULL)::int AS media_count
+      FROM media_folders folder
+      LEFT JOIN media_assets asset ON asset.organization_id = folder.organization_id AND asset.folder_id = folder.id
+      WHERE folder.organization_id = ${user.organizationId}
+      GROUP BY folder.id
+      ORDER BY folder.name
+    `,
     getSqlClient()<LoopRow[]>`
       WITH config AS (
         SELECT coalesce((SELECT default_timezone FROM settings WHERE organization_id = ${user.organizationId}), 'America/Sao_Paulo') AS default_timezone
       )
-      SELECT loop.id, loop.name, loop.status, loop.media_type, loop.no_repeat, loop.default_caption,
+      SELECT loop.id, loop.name, loop.status, loop.media_type, loop.media_folder_id,
+        folder.name AS media_folder_name, loop.no_repeat, loop.default_caption,
         loop.auto_comment_text, loop.auto_comment_delay_minutes, loop.image_every_n,
         loop.min_interval_minutes, loop.max_interval_minutes, loop.daily_limit_per_account,
         loop.tiered_limits, loop.tier_follower_threshold, loop.tier1_daily_limit,
@@ -117,7 +140,9 @@ export default async function LoopsPage({ searchParams }: PageProps) {
         , ARRAY(SELECT selected_media.media_asset_id::text FROM loop_media selected_media
           WHERE selected_media.organization_id = loop.organization_id AND selected_media.loop_id = loop.id
           ORDER BY selected_media.position) AS media_ids
-      FROM loops loop CROSS JOIN config WHERE loop.organization_id = ${user.organizationId}
+      FROM loops loop CROSS JOIN config
+      LEFT JOIN media_folders folder ON folder.organization_id = loop.organization_id AND folder.id = loop.media_folder_id
+      WHERE loop.organization_id = ${user.organizationId}
       ORDER BY loop.created_at DESC
     `,
   ]);
@@ -130,7 +155,11 @@ export default async function LoopsPage({ searchParams }: PageProps) {
   const loops = allLoops.filter((loop) => loop.no_repeat === (mode === "limitados"));
   const editing = allLoops.find((loop) => loop.id === first(query.editar));
   const creating = !editing && first(query.novo) === "1";
-  const canCreate = accounts.length > 0;
+  const freeAccounts = accounts.filter((account) => account.assigned_loop_ids.length === 0);
+  const selectableAccounts = editing
+    ? accounts.filter((account) => account.assigned_loop_ids.length === 0 || account.assigned_loop_ids.includes(editing.id))
+    : freeAccounts;
+  const canCreate = freeAccounts.length > 0;
 
   return (
     <div className="page-stack">
@@ -194,7 +223,7 @@ export default async function LoopsPage({ searchParams }: PageProps) {
                 </div>
               </div>
             </div>
-            <LoopAccountPicker accounts={accounts} initialIds={editing?.account_ids ?? []} editing={Boolean(editing)} />
+            <LoopAccountPicker accounts={selectableAccounts} initialIds={editing?.account_ids ?? []} editing={Boolean(editing)} />
             <label>Legenda padrão<textarea name="defaultCaption" rows={3} maxLength={2200} placeholder="Opcional" defaultValue={editing?.default_caption} /></label>
             <div className="loop-box">
               <label>
@@ -214,7 +243,15 @@ export default async function LoopsPage({ searchParams }: PageProps) {
                 min após a publicação
               </label>
             </div>
-            <LoopMediaPool key={editing?.id ?? "new"} library={media} initialIds={editing?.media_ids ?? []} maxBytes={env.UPLOAD_MAX_BYTES} />
+            <LoopMediaPool
+              key={editing?.id ?? "new"}
+              library={media}
+              folders={folders}
+              initialFolderId={editing?.media_folder_id ?? ""}
+              initialIds={editing?.media_ids ?? []}
+              initialMediaType={editing?.media_type ?? "REELS"}
+              maxBytes={env.UPLOAD_MAX_BYTES}
+            />
             <button className="button button-primary button-block" type="submit">{editing ? "Salvar alterações" : "Criar e iniciar loop"}</button>
           </form>
         </section>
@@ -224,8 +261,7 @@ export default async function LoopsPage({ searchParams }: PageProps) {
         <div className="loop-card-list">
           {loops.map((loop) => {
             const editHref = `${href({ editar: loop.id })}#editar-loop`;
-            const inLoop = new Set(loop.account_ids);
-            const outsideCount = accounts.filter((account) => !inLoop.has(account.id)).length;
+            const outsideCount = freeAccounts.length;
             const active = loop.status === "ACTIVE";
             return (
               <article className={`panel loop-card${editing?.id === loop.id ? " is-editing" : ""}`} key={loop.id}>
@@ -237,6 +273,7 @@ export default async function LoopsPage({ searchParams }: PageProps) {
                   <div className="loop-card-meta">
                     <span>{loop.min_interval_minutes}–{loop.max_interval_minutes} min entre posts</span>
                     <span>limite {loop.daily_limit_per_account}/dia/conta</span>
+                    <span>{loop.media_folder_name ? `pasta ${loop.media_folder_name}` : "pasta não definida"}</span>
                     <span>{loop.media_count} {POOL_NOUN[loop.media_type]} no pool</span>
                     {loop.tiered_limits ? <span>faixa até {loop.tier_follower_threshold.toLocaleString("pt-BR")} seguidores</span> : null}
                     {loop.finished_accounts ? <span>{loop.finished_accounts} conta(s) concluída(s)</span> : null}
@@ -254,7 +291,7 @@ export default async function LoopsPage({ searchParams }: PageProps) {
                     {loop.next_publication_at ? <span className="muted"> · próximo {formatDate(loop.next_publication_at)}</span> : null}
                   </div>
                   {outsideCount ? (
-                    <Link className="loop-card-outside" href={editHref}>{outsideCount} conta(s) conectada(s) fora deste loop →</Link>
+                    <Link className="loop-card-outside" href={editHref}>{outsideCount} conta(s) disponível(is) →</Link>
                   ) : null}
                 </div>
                 <div className="loop-card-actions">
@@ -284,9 +321,13 @@ export default async function LoopsPage({ searchParams }: PageProps) {
         <div className="panel">
           <EmptyState
             title={mode === "limitados" ? "Nenhum loop limitado" : "Nenhum loop contínuo"}
-            description={canCreate ? "Clique em Novo loop para criar uma rotina para as contas." : "Conecte pelo menos uma conta antes de criar um loop."}
-            href={canCreate ? undefined : "/contas"}
-            actionLabel={canCreate ? undefined : "Ir para contas"}
+            description={canCreate
+              ? "Clique em Novo loop para criar uma rotina para as contas."
+              : accounts.length
+                ? "Todas as contas conectadas já pertencem a outro loop."
+                : "Conecte pelo menos uma conta antes de criar um loop."}
+            href={!canCreate && !accounts.length ? "/contas" : undefined}
+            actionLabel={!canCreate && !accounts.length ? "Ir para contas" : undefined}
           />
         </div>
       )}

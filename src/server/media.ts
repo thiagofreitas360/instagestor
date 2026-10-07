@@ -88,6 +88,18 @@ export async function renameMediaFolder(folderId: string, name: string, actorUse
 
 export async function deleteMediaFolder(folderId: string, actorUserId: string, organizationId: string) {
   await getSqlClient().begin(async (sql) => {
+    const [folder] = await sql<Array<{ id: string }>>`
+      SELECT id FROM media_folders
+      WHERE organization_id = ${organizationId} AND id = ${folderId}
+      FOR UPDATE
+    `;
+    if (!folder) throw new Error("Pasta de mídia não encontrada");
+    const [loop] = await sql<Array<{ name: string }>>`
+      SELECT name FROM loops
+      WHERE organization_id = ${organizationId} AND media_folder_id = ${folderId}
+      ORDER BY created_at LIMIT 1
+    `;
+    if (loop) throw new Error(`A pasta é usada pelo loop "${loop.name}" e não pode ser excluída`);
     const deleted = await sql`DELETE FROM media_folders WHERE organization_id = ${organizationId} AND id = ${folderId} RETURNING id`;
     if (!deleted.length) throw new Error("Pasta de mídia não encontrada");
     await sql`
@@ -102,6 +114,21 @@ export async function moveMedia(assetId: string, folderId: string | null, actorU
     if (folderId) {
       const folder = await sql`SELECT id FROM media_folders WHERE organization_id = ${organizationId} AND id = ${folderId}`;
       if (!folder.length) throw new Error("Pasta de mídia não encontrada");
+    }
+    const [asset] = await sql<Array<{ folder_id: string | null }>>`
+      SELECT folder_id FROM media_assets
+      WHERE organization_id = ${organizationId} AND id = ${assetId} AND deleted_at IS NULL
+      FOR UPDATE
+    `;
+    if (!asset) throw new Error("Mídia não encontrada");
+    if (asset.folder_id !== folderId) {
+      const [loop] = await sql<Array<{ name: string }>>`
+        SELECT loop.name FROM loop_media selected
+        JOIN loops loop ON loop.organization_id = selected.organization_id AND loop.id = selected.loop_id
+        WHERE selected.organization_id = ${organizationId} AND selected.media_asset_id = ${assetId}
+        ORDER BY loop.created_at LIMIT 1
+      `;
+      if (loop) throw new Error(`A mídia é usada pelo loop "${loop.name}" e não pode ser movida`);
     }
     const moved = await sql`
       UPDATE media_assets SET folder_id = ${folderId}, updated_at = now()
@@ -125,11 +152,15 @@ export async function deleteMedia(assetId: string, actorUserId: string, organiza
       FOR UPDATE
     `;
     if (!asset) throw new Error("Mídia não encontrada");
-    const [usage] = await sql<Array<{ count: number }>>`
-      SELECT count(*)::int AS count FROM campaign_media
-      WHERE organization_id = ${organizationId} AND media_asset_id = ${assetId}
+    const [usage] = await sql<Array<{ campaign_count: number; loop_count: number; schedule_count: number }>>`
+      SELECT
+        (SELECT count(*)::int FROM campaign_media WHERE organization_id = ${organizationId} AND media_asset_id = ${assetId}) AS campaign_count,
+        (SELECT count(*)::int FROM loop_media WHERE organization_id = ${organizationId} AND media_asset_id = ${assetId}) AS loop_count,
+        (SELECT count(*)::int FROM schedule_media WHERE organization_id = ${organizationId} AND media_asset_id = ${assetId}) AS schedule_count
     `;
-    if (usage.count > 0) throw new Error("Mídia usada por campanha não pode ser excluída");
+    if (usage.loop_count > 0) throw new Error("Mídia usada por loop não pode ser excluída");
+    if (usage.schedule_count > 0) throw new Error("Mídia usada por escala não pode ser excluída");
+    if (usage.campaign_count > 0) throw new Error("Mídia usada por campanha não pode ser excluída");
 
     await sql`
       UPDATE media_assets SET processing_status = 'DELETED', deleted_at = now(), updated_at = now()

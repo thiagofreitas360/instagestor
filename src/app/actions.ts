@@ -507,6 +507,7 @@ async function loopInputFromForm(formData: FormData, user: { id: string; organiz
     tier1MinIntervalMinutes: values.tier1MinIntervalMinutes,
     tier1MaxIntervalMinutes: values.tier1MaxIntervalMinutes,
     mediaType: values.mediaType,
+    mediaFolderId: id.parse(formData.get("mediaFolderId")),
     imageEveryN: values.imageEveryN,
     noRepeat: formData.get("noRepeat") === "on",
     accountIds,

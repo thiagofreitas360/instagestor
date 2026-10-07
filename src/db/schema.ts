@@ -281,6 +281,7 @@ export const loops = pgTable(
       .notNull()
       .unique()
       .references(() => campaigns.id, { onDelete: "restrict" }),
+    mediaFolderId: uuid("media_folder_id"),
     name: text("name").notNull(),
     status: loopStatus("status").notNull().default("ACTIVE"),
     defaultCaption: text("default_caption").notNull().default(""),
@@ -305,10 +306,16 @@ export const loops = pgTable(
   (table) => [
     unique("loops_organization_id_unique").on(table.organizationId, table.id),
     index("loops_organization_status_idx").on(table.organizationId, table.status),
+    index("loops_organization_media_folder_idx").on(table.organizationId, table.mediaFolderId),
     foreignKey({
       columns: [table.organizationId, table.campaignId],
       foreignColumns: [campaigns.organizationId, campaigns.id],
       name: "loops_organization_campaign_fk",
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.organizationId, table.mediaFolderId],
+      foreignColumns: [mediaFolders.organizationId, mediaFolders.id],
+      name: "loops_organization_media_folder_fk",
     }).onDelete("restrict"),
     check("loops_name_valid", sql`length(trim(${table.name})) BETWEEN 1 AND 160`),
     check(
@@ -337,6 +344,7 @@ export const loopAccounts = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.loopId, table.instagramAccountId] }),
+    unique("loop_accounts_organization_account_unique").on(table.organizationId, table.instagramAccountId),
     foreignKey({
       columns: [table.organizationId, table.loopId],
       foreignColumns: [loops.organizationId, loops.id],

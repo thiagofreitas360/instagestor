@@ -22,6 +22,7 @@ export type LoopInput = {
   tier1MinIntervalMinutes: number;
   tier1MaxIntervalMinutes: number;
   mediaType: AutomatedMediaType;
+  mediaFolderId: string;
   imageEveryN: number;
   noRepeat: boolean;
   accountIds: string[];
@@ -45,7 +46,7 @@ export type ScheduleInput = {
   mediaIds: string[];
 };
 
-type Asset = { id: string; media_kind: "IMAGE" | "VIDEO" };
+type Asset = { id: string; media_kind: "IMAGE" | "VIDEO"; folder_id: string | null };
 type LoopMediaRow = { id: string; media_asset_id: string; media_kind: "IMAGE" | "VIDEO"; position: number };
 
 const ACTIVE_JOB_STATUSES = [
@@ -117,6 +118,36 @@ async function loadAvailableAccounts(
   return ids;
 }
 
+async function loadLoopAccounts(
+  sql: TransactionSql,
+  organizationId: string,
+  accountIds: string[],
+  currentLoopId?: string,
+) {
+  const ids = unique(accountIds);
+  if (!ids.length) throw new Error("Selecione ao menos uma conta");
+  const accounts = await sql<Array<{ id: string; username: string }>>`
+    SELECT id, username FROM instagram_accounts
+    WHERE organization_id = ${organizationId} AND id = ANY(${ids}::uuid[])
+      AND status IN ('CONNECTED', 'TOKEN_EXPIRING')
+    ORDER BY id
+    FOR UPDATE
+  `;
+  if (accounts.length !== ids.length) throw new Error("Uma ou mais contas estão desconectadas ou pertencem a outro cliente");
+  const assignments = await sql<Array<{ instagram_account_id: string; loop_id: string; loop_name: string }>>`
+    SELECT selected.instagram_account_id, selected.loop_id, loop.name AS loop_name
+    FROM loop_accounts selected
+    JOIN loops loop ON loop.organization_id = selected.organization_id AND loop.id = selected.loop_id
+    WHERE selected.organization_id = ${organizationId} AND selected.instagram_account_id = ANY(${ids}::uuid[])
+  `;
+  const conflict = assignments.find((assignment) => assignment.loop_id !== currentLoopId);
+  if (conflict) {
+    const account = accounts.find((candidate) => candidate.id === conflict.instagram_account_id);
+    throw new Error(`A conta @${account?.username ?? conflict.instagram_account_id} já pertence ao loop "${conflict.loop_name}"`);
+  }
+  return ids;
+}
+
 async function loadReadyAssets(
   sql: TransactionSql,
   organizationId: string,
@@ -126,9 +157,11 @@ async function loadReadyAssets(
   const ids = unique(mediaIds);
   if (!ids.length) throw new Error("Selecione ao menos uma mídia");
   const assets = await sql<Asset[]>`
-    SELECT id, media_kind FROM media_assets
+    SELECT id, media_kind, folder_id FROM media_assets
     WHERE organization_id = ${organizationId} AND id = ANY(${ids}::uuid[])
       AND processing_status = 'READY' AND deleted_at IS NULL
+    ORDER BY id
+    FOR SHARE
   `;
   if (assets.length !== ids.length) throw new Error("Uma ou mais mídias não estão prontas ou pertencem a outro cliente");
   const byId = new Map(assets.map((asset) => [asset.id, asset]));
@@ -140,6 +173,26 @@ async function loadReadyAssets(
     throw new Error("Loops de imagem aceitam somente imagens");
   }
   return ordered;
+}
+
+async function loadLoopAssets(
+  sql: TransactionSql,
+  organizationId: string,
+  folderId: string,
+  mediaIds: string[],
+  mediaType: AutomatedMediaType,
+) {
+  const [folder] = await sql<Array<{ id: string }>>`
+    SELECT id FROM media_folders
+    WHERE organization_id = ${organizationId} AND id = ${folderId}
+    FOR SHARE
+  `;
+  if (!folder) throw new Error("Pasta de mídia não encontrada");
+  const assets = await loadReadyAssets(sql, organizationId, mediaIds, mediaType);
+  if (assets.some((asset) => asset.folder_id !== folderId)) {
+    throw new Error("Todas as mídias do loop devem pertencer à pasta selecionada");
+  }
+  return assets;
 }
 
 function publicationTypeFor(asset: Pick<Asset, "media_kind">) {
@@ -464,8 +517,8 @@ export async function createLoop(input: LoopInput) {
     imageEveryN: input.mediaType === "MIXED" ? input.imageEveryN : 0,
   };
   const created = await getSqlClient().begin(async (sql) => {
-    const accountIds = await loadAvailableAccounts(sql, input.organizationId, input.accountIds);
-    const assets = await loadReadyAssets(sql, input.organizationId, input.mediaIds, input.mediaType);
+    const accountIds = await loadLoopAccounts(sql, input.organizationId, input.accountIds);
+    const assets = await loadLoopAssets(sql, input.organizationId, input.mediaFolderId, input.mediaIds, input.mediaType);
     const [campaign] = await sql<Array<{ id: string }>>`
       INSERT INTO campaigns (
         organization_id, name, origin, publication_type, caption, status,
@@ -478,12 +531,12 @@ export async function createLoop(input: LoopInput) {
     `;
     const [loop] = await sql<Array<{ id: string }>>`
       INSERT INTO loops (
-        organization_id, campaign_id, name, default_caption, auto_comment_text, auto_comment_delay_minutes,
+        organization_id, campaign_id, media_folder_id, name, default_caption, auto_comment_text, auto_comment_delay_minutes,
         min_interval_minutes, max_interval_minutes, daily_limit_per_account, tiered_limits,
         tier_follower_threshold, tier1_daily_limit, tier1_min_interval_minutes, tier1_max_interval_minutes,
         media_type, image_every_n, no_repeat, created_by
       ) VALUES (
-        ${input.organizationId}, ${campaign.id}, ${normalized.name}, ${normalized.defaultCaption},
+        ${input.organizationId}, ${campaign.id}, ${input.mediaFolderId}, ${normalized.name}, ${normalized.defaultCaption},
         ${normalized.autoCommentText}, ${input.autoCommentDelayMinutes},
         ${input.minIntervalMinutes}, ${input.maxIntervalMinutes}, ${input.dailyLimitPerAccount},
         ${input.tieredLimits}, ${input.tierFollowerThreshold}, ${input.tier1DailyLimit},
@@ -527,8 +580,8 @@ export async function createLoop(input: LoopInput) {
 export async function updateLoop(loopId: string, input: LoopInput) {
   validateLoopInput(input);
   const result = await getSqlClient().begin(async (sql) => {
-    const accountIds = await loadAvailableAccounts(sql, input.organizationId, input.accountIds);
-    const assets = await loadReadyAssets(sql, input.organizationId, input.mediaIds, input.mediaType);
+    const accountIds = await loadLoopAccounts(sql, input.organizationId, input.accountIds, loopId);
+    const assets = await loadLoopAssets(sql, input.organizationId, input.mediaFolderId, input.mediaIds, input.mediaType);
     const [loop] = await sql<Array<{ campaign_id: string; status: "ACTIVE" | "PAUSED"; no_repeat: boolean }>>`
       SELECT campaign_id, status, no_repeat FROM loops
       WHERE organization_id = ${input.organizationId} AND id = ${loopId} FOR UPDATE
@@ -596,7 +649,7 @@ export async function updateLoop(loopId: string, input: LoopInput) {
     const normalizedComment = input.autoCommentText?.trim() ?? "";
     const imageEveryN = input.mediaType === "MIXED" ? input.imageEveryN : 0;
     await sql`
-      UPDATE loops SET name = ${input.name.trim()}, default_caption = ${normalizedCaption},
+      UPDATE loops SET name = ${input.name.trim()}, media_folder_id = ${input.mediaFolderId}, default_caption = ${normalizedCaption},
         auto_comment_text = ${normalizedComment}, auto_comment_delay_minutes = ${input.autoCommentDelayMinutes},
         min_interval_minutes = ${input.minIntervalMinutes}, max_interval_minutes = ${input.maxIntervalMinutes},
         daily_limit_per_account = ${input.dailyLimitPerAccount}, tiered_limits = ${input.tieredLimits},

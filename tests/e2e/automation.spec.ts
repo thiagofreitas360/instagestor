@@ -4,25 +4,31 @@ import { login, withE2EDatabase } from "./helpers";
 
 async function seedAutomationMedia() {
   const filename = `automation-${randomUUID()}.jpg`;
+  const folderName = `Pasta automação ${randomUUID().slice(0, 8)}`;
   await withE2EDatabase(async (sql) => {
     const [organization] = await sql<Array<{ id: string }>>`
       SELECT id FROM organizations WHERE slug = 'instagestor' LIMIT 1
     `;
+    const [folder] = await sql<Array<{ id: string }>>`
+      INSERT INTO media_folders (organization_id, name)
+      VALUES (${organization.id}, ${folderName})
+      RETURNING id
+    `;
     await sql`
       INSERT INTO media_assets (
         organization_id, original_filename, storage_provider, storage_key, mime_type,
-        media_kind, size_bytes, checksum_sha256, processing_status
+        media_kind, size_bytes, checksum_sha256, folder_id, processing_status
       ) VALUES (
         ${organization.id}, ${filename}, 'LOCAL', ${`e2e/${randomUUID()}`}, 'image/jpeg',
-        'IMAGE', 1024, ${"a".repeat(64)}, 'READY'
+        'IMAGE', 1024, ${"a".repeat(64)}, ${folder.id}, 'READY'
       )
     `;
   });
-  return filename;
+  return { filename, folderName };
 }
 
 test("cria e edita loop, cria escala e alterna o tema", async ({ page }) => {
-  const filename = await seedAutomationMedia();
+  const { filename, folderName } = await seedAutomationMedia();
   const suffix = Date.now();
   const loopName = `Loop E2E ${suffix}`;
   const scheduleName = `Escala E2E ${suffix}`;
@@ -41,15 +47,22 @@ test("cria e edita loop, cria escala e alterna o tema", async ({ page }) => {
   await loopForm.getByLabel("Limite diário da faixa").fill("7");
   await loopForm.getByLabel("Auto-comentário").fill("Link na bio");
   await loopForm.getByLabel(/Esperar/).fill("2");
-  await loopForm.getByRole("button", { name: "Selecionar todas" }).click();
-  await loopForm.getByText(/Adicionar do acervo/).click();
-  await loopForm.getByRole("button", { name: new RegExp(filename) }).click();
+  const firstAccount = loopForm.locator(".loop-account").first();
+  const assignedUsername = await firstAccount.locator(".loop-account-name").innerText();
+  await firstAccount.click();
+  await loopForm.getByLabel("Pasta de mídias").selectOption({ label: `${folderName} (1)` });
   await expect(loopForm.getByText(/Mídias atuais no pool \(1\)/)).toBeVisible();
   await loopForm.getByRole("button", { name: "Criar e iniciar loop" }).click();
   await expect(page.getByText(/Loop criado para/)).toBeVisible();
 
   const loopCard = page.locator("article.loop-card").filter({ hasText: loopName });
   await expect(loopCard).toBeVisible();
+  await expect(loopCard).toContainText(folderName);
+  await page.getByRole("link", { name: "Novo loop" }).click();
+  const newLoopForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Criar e iniciar loop" }) });
+  await expect(newLoopForm.locator('input[name="accountIds"]:checked')).toHaveCount(0);
+  await expect(newLoopForm.getByText(assignedUsername, { exact: true })).toHaveCount(0);
+  await page.getByRole("link", { name: "Cancelar" }).click();
   await loopCard.getByRole("link", { name: `Editar ${loopName}` }).click();
   const editForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Salvar alterações" }) });
   await editForm.getByLabel("Intervalo mín (min)").fill("30");
