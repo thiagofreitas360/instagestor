@@ -5,6 +5,8 @@ import { EmptyState, formatDate, MessageBanner, PageHeader, Panel, StatusBadge, 
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { InstagramConnectButton } from "@/components/instagram-connect-button";
 import { AccountBulkSelection } from "@/components/account-bulk-selection";
+import { AccountWarmupBadge } from "@/components/account-warmup-badge";
+import { accountWarmup, WARMUP_PROFILES, type WarmupProfile } from "@/lib/account-warmup";
 import { requireAdmin } from "@/server/auth";
 import { listMetaApps } from "@/server/meta-apps";
 
@@ -15,6 +17,8 @@ type AccountRow = {
   profile_picture_url: string | null;
   account_type: string | null;
   is_new_account: boolean;
+  warmup_profile: WarmupProfile | null;
+  created_at: Date;
   status: string;
   token_expires_at: Date | null;
   publishing_limit_usage: number | null;
@@ -30,7 +34,7 @@ type AccountRow = {
 type GroupRow = { id: string; name: string };
 
 type PageProps = {
-  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[] }>;
+  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[]; perfil?: string | string[] }>;
 };
 
 function first(value?: string | string[]) {
@@ -44,7 +48,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const [accounts, groups, apps] = await Promise.all([
     sql<AccountRow[]>`
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.account_type, account.status,
-        account.token_expires_at, account.is_new_account,
+        account.token_expires_at, account.is_new_account, account.warmup_profile, account.created_at,
         account.last_error_at, account.last_error_message,
         account.publishing_limit_usage, account.publishing_limit_total,
         coalesce(array_agg(DISTINCT group_row.name ORDER BY group_row.name)
@@ -82,7 +86,12 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const normalizedSearch = search.toLocaleLowerCase("pt-BR").replace(/^@/, "");
   const requestedType = first(params.tipo);
   const selectedType = requestedType === "novas" || requestedType === "antigas" ? requestedType : "todas";
+  const requestedProfile = first(params.perfil);
+  const selectedProfile = requestedProfile && (Object.hasOwn(WARMUP_PROFILES, requestedProfile) || requestedProfile === "OFF") ? requestedProfile : "";
+  const isNew = (account: AccountRow) => Boolean(accountWarmup(account.warmup_profile, account.created_at)?.active
+    || (!account.warmup_profile && account.is_new_account));
   const matchingAccounts = accounts.filter((account) => {
+    if (selectedProfile && (account.warmup_profile ?? "OFF") !== selectedProfile) return false;
     if (selectedNiche && !account.group_ids.includes(selectedNiche)) return false;
     if (normalizedSearch && !account.username.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
       && !account.display_name?.toLocaleLowerCase("pt-BR").includes(normalizedSearch)) return false;
@@ -93,12 +102,13 @@ export default async function AccountsPage({ searchParams }: PageProps) {
     if (selectedFilter === "banidas") return account.status === "BANNED";
     return true;
   });
-  const newCount = matchingAccounts.filter((account) => account.is_new_account).length;
+  const newCount = matchingAccounts.filter(isNew).length;
   const filteredAccounts = matchingAccounts.filter((account) => selectedType === "todas"
-    || account.is_new_account === (selectedType === "novas"));
+    || isNew(account) === (selectedType === "novas"));
   const returnParams = new URLSearchParams({
     ...(selectedFilter !== "todas" ? { filtro: selectedFilter } : {}),
     ...(selectedType !== "todas" ? { tipo: selectedType } : {}),
+    ...(selectedProfile ? { perfil: selectedProfile } : {}),
     ...(selectedNiche ? { nicho: selectedNiche } : {}), ...(search ? { busca: search } : {}),
   });
   const returnTo = `/contas${returnParams.size ? `?${returnParams}` : ""}`;
@@ -136,6 +146,13 @@ export default async function AccountsPage({ searchParams }: PageProps) {
             <option value="antigas">Antigas ({matchingAccounts.length - newCount})</option>
           </select>
         </label>
+        <label>Filtrar por perfil
+          <select name="perfil" defaultValue={selectedProfile}>
+            <option value="">Todos os perfis</option>
+            {Object.entries(WARMUP_PROFILES).map(([value, profile]) => <option key={value} value={value}>{profile.label}</option>)}
+            <option value="OFF">Desativado</option>
+          </select>
+        </label>
         <button className="button button-secondary" type="submit">Aplicar filtros</button>
       </form>
 
@@ -155,6 +172,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
               ...(selectedNiche ? { nicho: selectedNiche } : {}),
               ...(search ? { busca: search } : {}),
               ...(selectedType !== "todas" ? { tipo: selectedType } : {}),
+              ...(selectedProfile ? { perfil: selectedProfile } : {}),
             }).toString()}`.replace(/\?$/, "")}
             key={value}
           >
@@ -179,7 +197,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
 
       <Panel>
         {filteredAccounts.length ? (
-          <AccountBulkSelection key={`${returnTo}:${first(params.ok) ?? ""}:${filteredAccounts.map((account) => `${account.id}:${account.is_new_account}`).join(",")}`} returnTo={returnTo} total={filteredAccounts.length}>
+          <AccountBulkSelection key={`${returnTo}:${first(params.ok) ?? ""}:${filteredAccounts.map((account) => `${account.id}:${account.is_new_account}:${account.warmup_profile}`).join(",")}`} returnTo={returnTo} total={filteredAccounts.length}>
           <div className="table-scroll">
             <table>
               <thead>
@@ -195,6 +213,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
               </thead>
               <tbody>
                 {filteredAccounts.map((account) => {
+                  const warmup = accountWarmup(account.warmup_profile, account.created_at);
                   const total = account.publishing_limit_total ?? 0;
                   const usage = account.publishing_limit_usage ?? 0;
                   const usagePercent = total ? Math.min(100, Math.round((usage / total) * 100)) : 0;
@@ -211,7 +230,9 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                           </span>
                           <span>
                             <strong>{account.display_name ?? `@${account.username}`}</strong>
-                            {account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
+                            <AccountWarmupBadge profile={account.warmup_profile} />
+                            {warmup?.active ? <small>Em aquecimento · dia {warmup.day}</small> : account.warmup_profile ? <small>Aquecimento concluído</small> : null}
+                            {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
                             <small>
                               @{account.username}{account.account_type ? ` · ${account.account_type}` : ""}
                               {account.meta_app_name ? ` · via ${account.meta_app_name}` : ""}

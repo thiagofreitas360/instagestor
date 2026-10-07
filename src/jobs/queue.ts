@@ -8,6 +8,8 @@ import { getInstagramProvider } from "@/providers";
 import { COMMENTS_SCOPE } from "@/providers/instagram";
 import { getStorageProvider } from "@/providers/storage";
 import { scheduleNextLoopJob } from "@/server/automation";
+import { accountWarmupAllowedAt } from "@/server/account-warmup";
+import type { WarmupProfile } from "@/lib/account-warmup";
 import { markAccountUnavailableIfCurrent } from "./account-availability";
 
 export type ClaimedJob = {
@@ -558,9 +560,12 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
         publishing_limit_usage: number | null;
         publishing_limit_total: number | null;
         publishing_limit_checked_at: Date | string | null;
+        warmup_profile: WarmupProfile | null;
+        account_created_at: Date | string;
       }>>`
         SELECT account.status AS account_status, account.encrypted_access_token,
-          account.publishing_limit_usage, account.publishing_limit_total, account.publishing_limit_checked_at
+          account.publishing_limit_usage, account.publishing_limit_total, account.publishing_limit_checked_at,
+          account.warmup_profile, account.created_at AS account_created_at
         FROM publication_jobs current_job
         JOIN instagram_accounts account ON account.organization_id = current_job.organization_id
           AND account.id = current_job.instagram_account_id
@@ -574,6 +579,17 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
       }
       if (currentState.encrypted_access_token !== details.encrypted_access_token) {
         throw new InstagramError("Token da conta mudou durante o processamento", "TRANSIENT", "ACCOUNT_TOKEN_CHANGED");
+      }
+      const warmupAt = await getSqlClient().begin((sql) => accountWarmupAllowedAt(sql, {
+        organizationId: job.organization_id, accountId: job.instagram_account_id,
+        profile: currentState.warmup_profile, connectedAt: currentState.account_created_at, excludeJobId: job.id,
+      }));
+      if (warmupAt.getTime() > Date.now()) {
+        await fencedUpdate(job, workerId, getSqlClient()`status = 'RETRY_WAIT', next_attempt_at = ${warmupAt.toISOString()},
+          last_error_code = 'ACCOUNT_WARMUP_WAIT', last_error_type = NULL,
+          last_error_message = 'Aguardando o intervalo do perfil de aquecimento',
+          locked_at = NULL, locked_by = NULL, lock_expires_at = NULL`);
+        return "warmup_wait" as const;
       }
       const [rhythm] = await getSqlClient()<Array<{
         delay_mode: string;

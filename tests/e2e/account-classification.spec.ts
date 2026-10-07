@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { login, withE2EDatabase } from "./helpers";
 
-test("classifica 50 contas em lote, combina filtros e altera a chave individual", async ({ page }, testInfo) => {
+test("mostra Balanceado por padrão, muda perfis de 50 contas, combina filtros e desliga o aquecimento", async ({ page }, testInfo) => {
   const prefix = `classificacao_${randomUUID().slice(0, 8)}`;
   const { groupId, firstId } = await withE2EDatabase(async (sql) => {
     const [organization] = await sql<Array<{ id: string }>>`SELECT id FROM organizations WHERE slug = 'instagestor'`;
@@ -20,21 +20,25 @@ test("classifica 50 contas em lote, combina filtros e altera a chave individual"
   await login(page);
   await page.goto(`/contas?busca=${prefix}`);
   await expect(page.locator("tbody tr")).toHaveCount(50);
+  await expect(page.locator(".account-warmup-badge").filter({ hasText: "Balanceado" })).toHaveCount(50);
   await page.getByRole("checkbox", { name: "Selecionar todas as 50 contas deste filtro", exact: true }).check();
   await expect(page.getByText("50 contas selecionadas", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Marcar como novas", exact: true }).click();
-  await expect(page.getByText("50 contas marcadas como novas", { exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Perfil de aquecimento", exact: true }).selectOption("FAST");
+  await page.getByRole("button", { name: "Aplicar perfil", exact: true }).click();
+  await expect(page.getByText("Perfil atualizado em 50 contas", { exact: true })).toBeVisible();
   await expect(page.locator(".new-account-badge")).toHaveCount(50);
-  await expect(page.getByRole("button", { name: "Marcar como antigas", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Aplicar perfil", exact: true })).toHaveCount(0);
   for (let attempt = 0; attempt < 2; attempt++) {
     await page.getByRole("button", { name: "Selecionar todas as 50 contas deste filtro", exact: true }).click();
-    await page.getByRole("button", { name: "Marcar como novas", exact: true }).click();
+    await page.getByRole("combobox", { name: "Perfil de aquecimento", exact: true }).selectOption("FAST");
+    await page.getByRole("button", { name: "Aplicar perfil", exact: true }).click();
     await expect(page.getByText("Nenhuma conta precisava ser alterada", { exact: true })).toBeVisible();
     await expect(page.getByText("0 contas selecionadas", { exact: true })).toBeVisible();
   }
   await page.screenshot({ path: testInfo.outputPath("contas-novas-desktop.png") });
 
   await page.getByRole("combobox", { name: "Tipo de conta", exact: true }).selectOption("novas");
+  await page.getByRole("combobox", { name: "Filtrar por perfil", exact: true }).selectOption("FAST");
   await page.getByRole("button", { name: "Aplicar filtros", exact: true }).click();
   await page.locator('tbody input[name="accountIds"]').first().check();
   await expect(page.locator("input[data-select-all]")).toHaveJSProperty("indeterminate", true);
@@ -45,8 +49,9 @@ test("classifica 50 contas em lote, combina filtros e altera a chave individual"
   await page.getByRole("button", { name: "Aplicar filtros", exact: true }).click();
   await expect(page.locator("tbody tr")).toHaveCount(10);
   await page.getByRole("button", { name: "Selecionar todas as 10 contas deste filtro", exact: true }).click();
-  await page.getByRole("button", { name: "Marcar como antigas", exact: true }).click();
-  await expect(page.getByText("10 contas marcadas como antigas", { exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Perfil de aquecimento", exact: true }).selectOption("OFF");
+  await page.getByRole("button", { name: "Aplicar perfil", exact: true }).click();
+  await expect(page.getByText("Perfil atualizado em 10 contas · aquecimento desativado", { exact: true })).toBeVisible();
   await expect(page.locator("tbody tr")).toHaveCount(0);
 
   await page.goto(`/contas?busca=${prefix}&tipo=novas`);
@@ -54,20 +59,23 @@ test("classifica 50 contas em lote, combina filtros e altera a chave individual"
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "Selecionar todas as 40 contas deste filtro", exact: true }).click();
   await page.screenshot({ path: testInfo.outputPath("contas-novas-mobile.png") });
-  await page.getByRole("button", { name: "Marcar como antigas", exact: true }).click();
-  await expect(page.getByText("40 contas marcadas como antigas", { exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Perfil de aquecimento", exact: true }).selectOption("OFF");
+  await page.getByRole("button", { name: "Aplicar perfil", exact: true }).click();
+  await expect(page.getByText("Perfil atualizado em 40 contas · aquecimento desativado", { exact: true })).toBeVisible();
   await expect(page.locator(".new-account-badge")).toHaveCount(0);
   await page.getByRole("combobox", { name: "Tipo de conta", exact: true }).selectOption("antigas");
   await page.getByRole("button", { name: "Aplicar filtros", exact: true }).click();
   await expect(page.locator("tbody tr")).toHaveCount(50);
 
   await page.goto(`/contas/${firstId}`);
-  await page.getByRole("switch", { name: "Conta nova — intervalo dobrado nos loops", exact: true }).check();
-  await page.getByRole("button", { name: "Salvar classificação", exact: true }).click();
-  await expect(page.getByText("1 conta marcada como nova", { exact: true })).toBeVisible();
+  await page.getByRole("switch", { name: "Aquecimento automático", exact: true }).check();
+  await page.getByRole("combobox", { name: "Perfil de aquecimento", exact: true }).selectOption("CONSERVATIVE");
+  await page.getByRole("button", { name: "Salvar aquecimento", exact: true }).click();
+  await expect(page.getByText("Perfil atualizado em 1 conta", { exact: true })).toBeVisible();
   await expect(page.locator(".new-account-badge")).toHaveCount(1);
-  await page.getByRole("switch", { name: "Conta nova — intervalo dobrado nos loops", exact: true }).uncheck();
-  await page.getByRole("button", { name: "Salvar classificação", exact: true }).click();
-  await expect(page.getByText("1 conta marcada como antiga", { exact: true })).toBeVisible();
+  await expect(page.locator(".account-warmup-badge")).toHaveText("Conservador");
+  await page.getByRole("switch", { name: "Aquecimento automático", exact: true }).uncheck();
+  await page.getByRole("button", { name: "Salvar aquecimento", exact: true }).click();
+  await expect(page.getByText("Perfil atualizado em 1 conta · aquecimento desativado", { exact: true })).toBeVisible();
   await expect(page.locator(".new-account-badge")).toHaveCount(0);
 });

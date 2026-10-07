@@ -1,15 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { getSqlClient } from "@/db/client";
-import { setAccountsNewStatus } from "@/server/accounts";
+import { createFakeAccounts, setAccountsNewStatus } from "@/server/accounts";
 import { createLoop, reconcileActiveLoops, scheduleNextLoopJob, setLoopStatus, updateLoop, type LoopInput } from "@/server/automation";
-import { claimJob } from "@/jobs/queue";
+import { claimJob, processClaimedJob } from "@/jobs/queue";
+import { encryptToken } from "@/lib/crypto";
+import { DAY_MS, type WarmupProfile } from "@/lib/account-warmup";
+import { accountWarmupAllowedAt } from "@/server/account-warmup";
 import { createAccounts, createCampaign, createJobs, createUser, TEST_ORGANIZATION_ID as org } from "./helpers";
 
-async function fixture(count = 2) {
+async function fixture(count = 2, profile: WarmupProfile | null = null) {
   const actor = await createUser();
   const accounts = await createAccounts(count);
   const sql = getSqlClient();
+  await sql`UPDATE instagram_accounts SET warmup_profile = ${profile}`;
   const [folder] = await sql<Array<{ id: string }>>`INSERT INTO media_folders (organization_id, name) VALUES (${org}, 'Pool') RETURNING id`;
   const [media] = await sql<Array<{ id: string }>>`
     INSERT INTO media_assets (organization_id, original_filename, storage_provider, storage_key, mime_type,
@@ -136,8 +140,11 @@ describe("account classification", () => {
     await setLoopStatus(loopId, "PAUSED", actor, org);
     await getSqlClient()`DELETE FROM loop_accounts WHERE loop_id = ${loopId}`;
     const moved = await createLoop({ ...input, name: "Outro loop" });
-    const [job] = await getSqlClient()<Array<{ scheduled_at: Date }>>`SELECT scheduled_at FROM publication_jobs WHERE loop_id = ${moved.loopId}`;
-    expect(new Date(job.scheduled_at).getTime() - publishedAt.getTime()).toBe(120 * 60000);
+    const [job] = await getSqlClient()<Array<{ scheduled_at: Date; joined_at: Date }>>`
+      SELECT job.scheduled_at, selected.created_at AS joined_at FROM publication_jobs job
+      JOIN loop_accounts selected ON selected.loop_id = job.loop_id AND selected.instagram_account_id = job.instagram_account_id
+      WHERE job.loop_id = ${moved.loopId}`;
+    expect(new Date(job.scheduled_at).getTime() - new Date(job.joined_at).getTime()).toBe(120 * 60000);
   });
 
   it("rolls back the classification and job changes if the transaction cannot finish", async () => {
@@ -197,5 +204,147 @@ describe("account classification", () => {
       expect(job.status).toBe("QUEUED");
       expect(job.scheduled_at.getTime() - publishedAt.getTime()).toBe(120 * 60000);
     }
+  });
+});
+
+describe("automatic warmup", () => {
+  it("gives new connections the Balanced profile and preserves dates when changing or disabling 50 accounts", async () => {
+    const actor = await createUser();
+    const ids = await createFakeAccounts(50, actor, org);
+    const before = await getSqlClient()`SELECT id, created_at, warmup_profile FROM instagram_accounts ORDER BY id`;
+    expect(before.every((account) => account.warmup_profile === "BALANCED")).toBe(true);
+    expect(await setAccountsNewStatus(ids, false, actor, org, "FAST")).toEqual({ changed: 50, unchanged: 0 });
+    expect(await setAccountsNewStatus(ids, false, actor, org, "FAST")).toEqual({ changed: 0, unchanged: 50 });
+    expect(await setAccountsNewStatus(ids, false, actor, org)).toEqual({ changed: 50, unchanged: 0 });
+    const after = await getSqlClient()`SELECT id, created_at, warmup_profile FROM instagram_accounts ORDER BY id`;
+    expect(after.map((account) => [account.id, account.created_at])).toEqual(before.map((account) => [account.id, account.created_at]));
+    expect(after.every((account) => account.warmup_profile === null)).toBe(true);
+  });
+
+  it("waits 50–60 minutes for the first post, keeps the original countdown on recovery and then waits 12 hours", async () => {
+    const { actor, accounts, loopId, input } = await fixture(1, "BALANCED");
+    const sql = getSqlClient();
+    await setLoopStatus(loopId, "PAUSED", actor, org);
+    await sql`DELETE FROM loop_accounts WHERE loop_id = ${loopId}`;
+    const created = await createLoop({ ...input, name: "Primeira postagem", minIntervalMinutes: 50, maxIntervalMinutes: 60 });
+    const [membership] = await sql`SELECT created_at FROM loop_accounts WHERE loop_id = ${created.loopId}`;
+    const initial = await pending(accounts[0].id);
+    const gap = initial.scheduled_at.getTime() - new Date(membership.created_at).getTime();
+    expect(gap).toBeGreaterThanOrEqual(50 * 60000);
+    expect(gap).toBeLessThanOrEqual(60 * 60000);
+    expect(await claimJob("warmup-first")).toBeNull();
+    await reconcileActiveLoops();
+    expect(await pending(accounts[0].id)).toEqual(initial);
+    // Simula recuperação 20 minutos após a entrada: o relógio continua ancorado na entrada.
+    await sql`UPDATE loop_accounts SET created_at = created_at - interval '20 minutes', first_post_at = first_post_at - interval '20 minutes' WHERE loop_id = ${created.loopId}`;
+    await sql`DELETE FROM publication_jobs WHERE loop_id = ${created.loopId}`;
+    await reconcileActiveLoops();
+    expect((await pending(accounts[0].id)).scheduled_at.getTime()).toBe(initial.scheduled_at.getTime() - 20 * 60000);
+    const publishedAt = await publish(created.loopId, accounts[0].id, 0);
+    expect((await pending(accounts[0].id)).scheduled_at.getTime() - publishedAt.getTime()).toBe(12 * 3_600_000);
+  });
+
+  it("advances an already queued job to the next stage and releases it to normal pacing after completion", async () => {
+    const { accounts, loopId } = await fixture(1, "BALANCED");
+    const sql = getSqlClient();
+    const publishedAt = await publish(loopId, accounts[0].id, 20);
+    const id = (await pending(accounts[0].id)).id;
+    await sql`UPDATE instagram_accounts SET created_at = ${new Date(Date.now() - 2 * DAY_MS).toISOString()}`;
+    await reconcileActiveLoops();
+    expect((await pending(accounts[0].id)).scheduled_at.getTime() - publishedAt.getTime()).toBe(6 * 3_600_000);
+    expect((await pending(accounts[0].id)).id).toBe(id);
+    await sql`UPDATE instagram_accounts SET created_at = ${new Date(Date.now() - 10 * DAY_MS).toISOString()}`;
+    await reconcileActiveLoops();
+    expect((await pending(accounts[0].id)).scheduled_at.getTime() - publishedAt.getTime()).toBe(60 * 60000);
+  });
+
+  it("removes a warmup hold before the first loop post without restarting the initial countdown", async () => {
+    const { actor, accounts, loopId } = await fixture(1, "BALANCED");
+    const sql = getSqlClient();
+    const [membership] = await sql`SELECT first_post_at FROM loop_accounts WHERE loop_id = ${loopId}`;
+    const manual = await createCampaign(actor, "SCHEDULED");
+    const [manualJob] = await createJobs(manual, accounts);
+    await sql`UPDATE publication_jobs SET status = 'PUBLISHED', published_at = now() - interval '1 hour' WHERE id = ${manualJob.id}`;
+    await setAccountsNewStatus([accounts[0].id], false, actor, org, "CONSERVATIVE");
+    expect((await pending(accounts[0].id)).scheduled_at.getTime()).toBeGreaterThan(Date.now() + 10 * 3_600_000);
+    await setAccountsNewStatus([accounts[0].id], false, actor, org);
+    expect((await pending(accounts[0].id)).scheduled_at.getTime()).toBe(new Date(membership.first_post_at).getTime());
+  });
+
+  it("enforces the account budget across manual campaigns and loop jobs in the worker without consuming retries", async () => {
+    const { actor, accounts, loopId } = await fixture(1, "BALANCED");
+    const sql = getSqlClient();
+    await sql`UPDATE instagram_accounts SET encrypted_access_token = ${encryptToken("fake-token:warmup:account")}`;
+    const manual = await createCampaign(actor, "SCHEDULED");
+    const [manualJob] = await createJobs(manual, accounts);
+    await sql`UPDATE publication_jobs SET status = 'PUBLISHED', published_at = now() - interval '1 hour' WHERE id = ${manualJob.id}`;
+    await sql`UPDATE publication_jobs SET scheduled_at = now() - interval '1 minute' WHERE loop_id = ${loopId}`;
+    const claim = await claimJob("warmup-worker");
+    expect(claim).not.toBeNull();
+    await processClaimedJob(claim!, "warmup-worker");
+    const job = await pending(accounts[0].id);
+    expect(job.status).toBe("RETRY_WAIT");
+    expect(job.attempt_count).toBe(0);
+    expect(job.next_attempt_at!.getTime()).toBeGreaterThan(Date.now() + 10.9 * 3_600_000);
+    const [external] = await sql`SELECT meta_container_id, last_error_code FROM publication_jobs WHERE id = ${job.id}`;
+    expect(external).toMatchObject({ meta_container_id: null, last_error_code: "ACCOUNT_WARMUP_WAIT" });
+    await setAccountsNewStatus([accounts[0].id], false, actor, org);
+    expect((await pending(accounts[0].id)).next_attempt_at!.getTime()).toBeLessThan(Date.now() + 61 * 60000);
+  });
+
+  it("publishes only once when two campaigns for the same new account run concurrently", async () => {
+    const { actor, accounts, loopId } = await fixture(1, "BALANCED");
+    const sql = getSqlClient();
+    const first = await pending(accounts[0].id);
+    const manual = await createCampaign(actor, "SCHEDULED");
+    const [manualJob] = await createJobs(manual, accounts);
+    const container = `fake_${Buffer.from(JSON.stringify({ id: "warmup-ready", readyAt: 0 })).toString("base64url")}`;
+    await sql`UPDATE instagram_accounts SET encrypted_access_token = ${encryptToken("fake-token:warmup:account")}`;
+    await sql`UPDATE publication_jobs SET scheduled_at = now() - interval '1 minute', meta_container_id = ${container},
+      direct_media_asset_id = ${first.direct_media_asset_id}, publication_type_override = 'REEL'
+      WHERE id IN (${first.id}, ${manualJob.id})`;
+    const one = await claimJob("warmup-parallel-a");
+    const two = await claimJob("warmup-parallel-b");
+    await Promise.all([processClaimedJob(one!, "warmup-parallel-a"), processClaimedJob(two!, "warmup-parallel-b")]);
+    await sql`UPDATE publication_jobs SET next_attempt_at = now() - interval '1 second' WHERE status = 'RETRY_WAIT'`;
+    const retry = await claimJob("warmup-parallel-retry");
+    if (retry) await processClaimedJob(retry, "warmup-parallel-retry");
+    const [{ total }] = await sql`SELECT count(*)::int AS total FROM publication_jobs WHERE status = 'PUBLISHED'`;
+    expect(total).toBe(1);
+    const [held] = await sql`SELECT next_attempt_at, attempt_count FROM publication_jobs WHERE id IN (${first.id}, ${manualJob.id}) AND status = 'RETRY_WAIT'`;
+    expect(held.attempt_count).toBe(0);
+    expect(new Date(held.next_attempt_at).getTime()).toBeGreaterThan(Date.now() + 11.9 * 3_600_000);
+    const nextLoop = await pending(accounts[0].id);
+    expect(Math.max(nextLoop.scheduled_at.getTime(), nextLoop.next_attempt_at?.getTime() ?? 0)).toBeGreaterThan(Date.now() + 11.9 * 3_600_000);
+    const [{ total: loopJobs }] = await sql`SELECT count(*)::int AS total FROM publication_jobs WHERE loop_id = ${loopId}`;
+    expect(loopJobs).toBeGreaterThanOrEqual(1);
+  });
+
+  it("uses the smaller follower-tier cap for all publication origins and spaces terminal failures", async () => {
+    const { actor, accounts, loopId } = await fixture(1, "FAST");
+    const sql = getSqlClient();
+    await sql`UPDATE instagram_accounts SET created_at = ${new Date(Date.now() - 2 * DAY_MS).toISOString()}`;
+    await sql`UPDATE loops SET tiered_limits = true, tier1_daily_limit = 1 WHERE id = ${loopId}`;
+    await sql`INSERT INTO account_daily_metrics (organization_id, instagram_account_id, day, followers_count)
+      VALUES (${org}, ${accounts[0].id}, current_date, 100)`;
+    const campaign = await createCampaign(actor, "SCHEDULED");
+    const [job] = await createJobs(campaign, accounts);
+    await sql`UPDATE publication_jobs SET status = 'FAILED', started_at = now() - interval '1 hour' WHERE id = ${job.id}`;
+    const eligibleAt = await sql.begin((tx) => accountWarmupAllowedAt(tx, {
+      organizationId: org, accountId: accounts[0].id, profile: "FAST", connectedAt: new Date(Date.now() - 2 * DAY_MS),
+    }));
+    expect(eligibleAt.getTime()).toBeGreaterThan(Date.now() + 22.9 * 3_600_000);
+  });
+
+  it("releases a manual campaign held only by warmup when the profile is disabled", async () => {
+    const actor = await createUser();
+    const accounts = await createAccounts(1);
+    const sql = getSqlClient();
+    await setAccountsNewStatus([accounts[0].id], false, actor, org, "BALANCED");
+    const campaign = await createCampaign(actor, "SCHEDULED");
+    const [job] = await createJobs(campaign, accounts, { status: "RETRY_WAIT", nextAttemptAt: new Date(Date.now() + 12 * 3_600_000) });
+    await sql`UPDATE publication_jobs SET last_error_code = 'ACCOUNT_WARMUP_WAIT' WHERE id = ${job.id}`;
+    await setAccountsNewStatus([accounts[0].id], false, actor, org);
+    expect((await claimJob("warmup-disabled"))?.id).toBe(job.id);
   });
 });

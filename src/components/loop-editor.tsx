@@ -2,8 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { formatBytes, initials } from "@/components/ui";
+import { AccountWarmupBadge } from "@/components/account-warmup-badge";
+import type { WarmupProfile } from "@/lib/account-warmup";
 
-type LoopAccount = { id: string; username: string; display_name: string | null; profile_picture_url: string | null; is_new_account: boolean };
+type LoopAccount = { id: string; username: string; display_name: string | null; profile_picture_url: string | null; is_new_account: boolean; warmup_profile: WarmupProfile | null };
 type MediaType = "REELS" | "IMAGE" | "MIXED";
 type LoopAsset = {
   id: string;
@@ -63,7 +65,8 @@ export function LoopAccountPicker({
                 ) : initials(account.display_name ?? account.username)}
               </span>
               <span className="loop-account-name">@{account.username}</span>
-              {account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
+              <AccountWarmupBadge profile={account.warmup_profile} />
+              {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
               {isOutside ? (
                 <>
                   <small className="loop-note-off">fora do loop</small>

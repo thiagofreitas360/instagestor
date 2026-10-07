@@ -225,12 +225,10 @@ describe("loops", () => {
       SELECT direct_media_asset_id, scheduled_at FROM publication_jobs WHERE loop_id = ${created.loopId} ORDER BY scheduled_at
     `;
     expect(new Set(jobs.map((job) => job.direct_media_asset_id)).size).toBe(5);
-    // Primeira rodada espaçada: 2 a 5 minutos entre uma conta e a próxima.
-    for (let index = 1; index < jobs.length; index += 1) {
-      const gap = new Date(jobs[index].scheduled_at).getTime() - new Date(jobs[index - 1].scheduled_at).getTime();
-      expect(gap).toBeGreaterThanOrEqual(120_000);
-      expect(gap).toBeLessThanOrEqual(300_000);
-    }
+    const [membership] = await sql<Array<{ created_at: Date }>>`SELECT created_at FROM loop_accounts WHERE loop_id = ${created.loopId} LIMIT 1`;
+    // Todas esperam o intervalo completo desde a entrada, sem atraso acumulado entre contas.
+    for (const job of jobs) expect(new Date(job.scheduled_at).getTime() - new Date(membership.created_at).getTime()).toBe(25 * 60_000);
+    expect(await claimJob("first-loop-delay")).toBeNull();
   });
 
   it("lets each loop account publish without waiting for a stuck account", async () => {

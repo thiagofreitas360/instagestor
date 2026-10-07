@@ -113,10 +113,14 @@ export async function setAccountsNewStatusAction(formData: FormData) {
   let result: { changed: number; unchanged: number };
   let accountIds: string[];
   let isNewAccount: boolean;
+  let warmupProfile: "FAST" | "BALANCED" | "CONSERVATIVE" | null = null;
+  const changingProfile = formData.has("warmupProfile");
   try {
     accountIds = z.array(id).min(1, "Selecione ao menos uma conta").parse(formData.getAll("accountIds"));
-    isNewAccount = z.enum(["true", "false"]).parse(formData.get("isNewAccount")) === "true";
-    result = await setAccountsNewStatus(accountIds, isNewAccount, user.id, user.organizationId);
+    const selectedProfile = changingProfile ? z.enum(["FAST", "BALANCED", "CONSERVATIVE", "OFF"]).parse(formData.get("warmupProfile")) : "OFF";
+    warmupProfile = selectedProfile === "OFF" ? null : selectedProfile;
+    isNewAccount = changingProfile ? false : z.enum(["true", "false"]).parse(formData.get("isNewAccount")) === "true";
+    result = await setAccountsNewStatus(accountIds, isNewAccount, user.id, user.organizationId, warmupProfile);
     revalidatePath("/contas");
     revalidatePath("/loops");
     revalidatePath("/fila");
@@ -126,7 +130,9 @@ export async function setAccountsNewStatusAction(formData: FormData) {
     redirect(`${destination.pathname}${destination.search}`);
   }
   const count = result.changed;
-  const text = count
+  const text = changingProfile
+    ? (count ? `Perfil atualizado em ${count} ${count === 1 ? "conta" : "contas"}${warmupProfile ? "" : " · aquecimento desativado"}` : "Nenhuma conta precisava ser alterada")
+    : count
     ? `${count} ${count === 1 ? "conta marcada" : "contas marcadas"} como ${isNewAccount ? (count === 1 ? "nova" : "novas") : (count === 1 ? "antiga" : "antigas")}${result.unchanged ? ` · ${result.unchanged} já estavam nessa classificação` : ""}`
     : "Nenhuma conta precisava ser alterada";
   destination.searchParams.set("ok", text);

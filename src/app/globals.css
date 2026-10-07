@@ -452,6 +452,8 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--brand); 
 .account-select-cell { width: 42px; text-align: center; }
 .account-new-status-form { display: grid; justify-items: start; gap: 10px; margin: 0 22px 22px; }
 .account-new-status-form .form-hint { margin: 0; }
+.account-warmup-copy { margin: 0 22px 22px; color: var(--text-soft); font-size: 11px; }
+.account-bulk-toolbar label { display: grid; gap: 4px; font-size: 11px; }
 .loop-account-intervals { margin-top: 10px; }
 .loop-account-intervals ul { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
 .loop-account-intervals li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

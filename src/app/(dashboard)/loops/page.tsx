@@ -8,6 +8,8 @@ import { getSqlClient } from "@/db/client";
 import { requireAdmin } from "@/server/auth";
 import { getEnv } from "@/lib/env";
 import { loopAccountLimits } from "@/server/automation";
+import { AccountWarmupBadge } from "@/components/account-warmup-badge";
+import type { WarmupProfile } from "@/lib/account-warmup";
 
 type Account = {
   id: string;
@@ -16,6 +18,8 @@ type Account = {
   profile_picture_url: string | null;
   status: string;
   is_new_account: boolean;
+  warmup_profile: WarmupProfile | null;
+  account_created_at: Date;
   followers_count: number | null;
   assigned_loop_ids: string[];
 };
@@ -85,6 +89,7 @@ export default async function LoopsPage({ searchParams }: PageProps) {
   const [accounts, media, folders, allLoops] = await Promise.all([
     getSqlClient()<Account[]>`
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.status, account.is_new_account,
+        account.warmup_profile, account.created_at AS account_created_at,
         (SELECT followers_count FROM account_daily_metrics metrics
           WHERE metrics.organization_id = account.organization_id AND metrics.instagram_account_id = account.id
             AND followers_count IS NOT NULL ORDER BY day DESC LIMIT 1) AS followers_count,
@@ -133,7 +138,7 @@ export default async function LoopsPage({ searchParams }: PageProps) {
         (SELECT count(*)::int FROM publication_jobs job
           WHERE job.organization_id = loop.organization_id AND job.loop_id = loop.id
             AND job.status IN ('QUEUED', 'RETRY_WAIT')) AS queued_count,
-        (SELECT min(job.scheduled_at) FROM publication_jobs job
+        (SELECT min(CASE WHEN job.status = 'RETRY_WAIT' THEN coalesce(job.next_attempt_at, job.scheduled_at) ELSE job.scheduled_at END) FROM publication_jobs job
           WHERE job.organization_id = loop.organization_id AND job.loop_id = loop.id
             AND job.status IN ('QUEUED', 'RETRY_WAIT')) AS next_publication_at
         , ARRAY(SELECT selected_account.instagram_account_id::text FROM loop_accounts selected_account
@@ -216,6 +221,7 @@ export default async function LoopsPage({ searchParams }: PageProps) {
               <label>Limite diário/conta<input name="dailyLimitPerAccount" type="number" min={1} max={200} defaultValue={editing?.daily_limit_per_account ?? 24} required /></label>
               <label className="loop-only-mixed">1 imagem a cada N vídeos<input name="imageEveryN" type="number" min={1} max={100} defaultValue={editing?.image_every_n || 3} required /></label>
             </div>
+            <p className="form-hint">Ao entrar no loop, cada conta espera o intervalo configurado antes da primeira postagem. Depois, o perfil de aquecimento pode aumentar a espera e reduzir o limite diário.</p>
             <div className="loop-box loop-tiers">
               <label className="loop-check">
                 <input name="tieredLimits" type="checkbox" defaultChecked={editing?.tiered_limits ?? false} />
@@ -301,7 +307,8 @@ export default async function LoopsPage({ searchParams }: PageProps) {
                         const limits = loopAccountLimits({ ...loop, ...account });
                         return <li key={account.id}>
                           <span>@{account.username}</span>
-                          {account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
+                          <AccountWarmupBadge profile={account.warmup_profile} />
+                          {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
                           <span>{limits.minIntervalMinutes}–{limits.maxIntervalMinutes} min · limite {limits.dailyLimit}/dia</span>
                         </li>;
                       })}

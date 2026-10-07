@@ -3,6 +3,8 @@ import { DateTime } from "luxon";
 import type { TransactionSql } from "postgres";
 import { getSqlClient } from "@/db/client";
 import { getEnv } from "@/lib/env";
+import { accountWarmup, DAY_MS, type WarmupProfile } from "@/lib/account-warmup";
+import { accountWarmupAllowedAt } from "./account-warmup";
 
 type AutomatedMediaType = "REELS" | "IMAGE" | "MIXED";
 
@@ -234,6 +236,9 @@ export function nextLoopScheduleAt(input: {
 
 export function effectiveLoopLimits(input: {
   isNewAccount?: boolean;
+  warmupProfile?: WarmupProfile | null;
+  accountCreatedAt?: Date | string;
+  now?: Date;
   followerCount: number | null;
   tieredLimits: boolean;
   tierFollowerThreshold: number;
@@ -255,12 +260,18 @@ export function effectiveLoopLimits(input: {
     minIntervalMinutes: input.minIntervalMinutes,
     maxIntervalMinutes: input.maxIntervalMinutes,
   };
-  const multiplier = input.isNewAccount ? 2 : 1;
-  return { ...limits, minIntervalMinutes: limits.minIntervalMinutes * multiplier, maxIntervalMinutes: limits.maxIntervalMinutes * multiplier };
+  const warmup = accountWarmup(input.warmupProfile, input.accountCreatedAt ?? new Date(), input.now);
+  const dailyLimit = Math.min(limits.dailyLimit, warmup?.dailyLimit ?? limits.dailyLimit);
+  const multiplier = !input.warmupProfile && input.isNewAccount ? 2 : 1;
+  const spacing = warmup?.active ? Math.ceil(DAY_MS / dailyLimit / 60_000) : 0;
+  return { dailyLimit, minIntervalMinutes: Math.max(limits.minIntervalMinutes * multiplier, spacing),
+    maxIntervalMinutes: Math.max(limits.maxIntervalMinutes * multiplier, spacing) };
 }
 
 export type LoopAccountLimitsRow = {
   is_new_account: boolean;
+  warmup_profile: WarmupProfile | null;
+  account_created_at: Date | string;
   followers_count: number | null;
   tiered_limits: boolean;
   tier_follower_threshold: number;
@@ -272,9 +283,10 @@ export type LoopAccountLimitsRow = {
   tier1_max_interval_minutes: number;
 };
 
-export function loopAccountLimits(row: LoopAccountLimitsRow) {
+export function loopAccountLimits(row: LoopAccountLimitsRow, includeWarmup = true) {
   return effectiveLoopLimits({
-    isNewAccount: row.is_new_account, followerCount: row.followers_count,
+    warmupProfile: includeWarmup ? row.warmup_profile : null, accountCreatedAt: row.account_created_at,
+    isNewAccount: !row.warmup_profile && row.is_new_account, followerCount: row.followers_count,
     tieredLimits: row.tiered_limits, tierFollowerThreshold: row.tier_follower_threshold,
     dailyLimitPerAccount: row.daily_limit_per_account,
     minIntervalMinutes: row.min_interval_minutes, maxIntervalMinutes: row.max_interval_minutes,
@@ -296,28 +308,41 @@ async function loopScheduleAt(sql: TransactionSql, input: {
   loopId: string;
   accountId: string;
   limits: ReturnType<typeof effectiveLoopLimits>;
+  baseLimits: ReturnType<typeof effectiveLoopLimits>;
+  joinedAt: Date | string;
   timezone: string;
   completedAt?: Date;
-  startAt?: Date;
   reschedule?: boolean;
 }) {
   const now = new Date();
   const timezone = input.timezone;
   const { start, end } = localDayBounds(now, timezone);
-  const [history] = await sql<Array<{ published: number; last_published_at: Date | null }>>`
+  const [history] = await sql<Array<{ published: number; last_published_at: Date | null; has_loop_publication: boolean }>>`
     SELECT count(*) FILTER (WHERE job.loop_id = ${input.loopId}
         AND job.published_at >= ${start.toISOString()} AND job.published_at < ${end.toISOString()})::int AS published,
-      max(job.published_at) AS last_published_at
+      max(job.published_at) AS last_published_at,
+      coalesce(bool_or(job.loop_id = ${input.loopId}), false) AS has_loop_publication
     FROM publication_jobs job
     JOIN campaigns campaign ON campaign.organization_id = job.organization_id AND campaign.id = job.campaign_id
     WHERE job.organization_id = ${input.organizationId} AND job.instagram_account_id = ${input.accountId}
       AND job.status = 'PUBLISHED' AND campaign.origin = 'LOOP'
   `;
   const completedAt = input.completedAt ?? history?.last_published_at;
-  if (!completedAt) return input.startAt ? new Date(input.startAt) : now;
+  let firstAt = now;
+  if (!history?.has_loop_publication) {
+    const candidate = new Date(new Date(input.joinedAt).getTime()
+      + randomMinutes(input.baseLimits.minIntervalMinutes, input.baseLimits.maxIntervalMinutes) * 60_000);
+    const [membership] = await sql<Array<{ first_post_at: Date | string }>>`
+      UPDATE loop_accounts SET first_post_at = coalesce(first_post_at, ${candidate.toISOString()})
+      WHERE organization_id = ${input.organizationId} AND loop_id = ${input.loopId} AND instagram_account_id = ${input.accountId}
+      RETURNING first_post_at
+    `;
+    firstAt = new Date(membership.first_post_at);
+  }
+  if (!completedAt) return new Date(Math.max(now.getTime(), firstAt.getTime()));
   return nextLoopScheduleAt({
     completedAt: new Date(completedAt), now,
-    notBefore: input.reschedule ? now : new Date(Math.max(now.getTime(), input.startAt?.getTime() ?? 0)),
+    notBefore: new Date(Math.max(now.getTime(), history?.has_loop_publication ? 0 : firstAt.getTime())),
     reschedule: input.reschedule, timezone,
     publishedToday: history?.published ?? 0,
     dailyLimit: input.limits.dailyLimit,
@@ -326,13 +351,14 @@ async function loopScheduleAt(sql: TransactionSql, input: {
   });
 }
 
-export async function reschedulePendingLoopJobs(sql: TransactionSql, organizationId: string, accountIds: string[]) {
+export async function reschedulePendingLoopJobs(sql: TransactionSql, organizationId: string, accountIds: string[], force = true) {
   const jobs = await sql<Array<LoopAccountLimitsRow & {
     id: string; loop_id: string; instagram_account_id: string; status: string;
-    scheduled_at: Date; next_attempt_at: Date | null;
+    scheduled_at: Date; next_attempt_at: Date | null; joined_at: Date; warmup_daily_limit: number | null; last_error_code: string | null;
   }>>`
     SELECT job.id, job.loop_id, job.instagram_account_id, job.status, job.scheduled_at, job.next_attempt_at,
-      account.is_new_account, metrics.followers_count,
+      account.is_new_account, account.warmup_profile, account.created_at AS account_created_at,
+      selected.created_at AS joined_at, job.warmup_daily_limit, job.last_error_code, metrics.followers_count,
       loop.tiered_limits, loop.tier_follower_threshold, loop.daily_limit_per_account,
       loop.min_interval_minutes, loop.max_interval_minutes, loop.tier1_daily_limit,
       loop.tier1_min_interval_minutes, loop.tier1_max_interval_minutes
@@ -361,15 +387,21 @@ export async function reschedulePendingLoopJobs(sql: TransactionSql, organizatio
   const timezone = preferences?.default_timezone ?? "America/Sao_Paulo";
   const changes = [];
   for (const job of jobs) {
-    const scheduledAt = await loopScheduleAt(sql, {
+    const warmupLimit = accountWarmup(job.warmup_profile, job.account_created_at)?.dailyLimit ?? null;
+    if (!force && job.warmup_daily_limit === warmupLimit) continue;
+    const loopAt = await loopScheduleAt(sql, {
       organizationId, loopId: job.loop_id, accountId: job.instagram_account_id,
-      limits: loopAccountLimits(job), timezone, startAt: job.scheduled_at, reschedule: true,
+      limits: loopAccountLimits(job), timezone, reschedule: true,
+      baseLimits: loopAccountLimits(job, false), joinedAt: job.joined_at,
     });
+    const warmupAt = await accountWarmupAllowedAt(sql, { organizationId, accountId: job.instagram_account_id,
+      profile: job.warmup_profile, connectedAt: job.account_created_at, normalLimit: loopAccountLimits(job).dailyLimit });
+    const scheduledAt = new Date(Math.max(loopAt.getTime(), warmupAt.getTime()));
     const previousNextAttemptAt = job.next_attempt_at ? new Date(job.next_attempt_at) : null;
     const nextAttemptAt = job.status === "RETRY_WAIT"
-      ? new Date(Math.max(scheduledAt.getTime(), previousNextAttemptAt?.getTime() ?? 0)) : previousNextAttemptAt;
+      ? new Date(Math.max(scheduledAt.getTime(), job.last_error_code === "ACCOUNT_WARMUP_WAIT" ? 0 : previousNextAttemptAt?.getTime() ?? 0)) : previousNextAttemptAt;
     await sql`
-      UPDATE publication_jobs SET scheduled_at = ${scheduledAt.toISOString()},
+      UPDATE publication_jobs SET scheduled_at = ${scheduledAt.toISOString()}, warmup_daily_limit = ${warmupLimit},
         next_attempt_at = ${nextAttemptAt?.toISOString() ?? null}, updated_at = now()
       WHERE organization_id = ${organizationId} AND id = ${job.id} AND status IN ('DRAFT', 'QUEUED', 'RETRY_WAIT')
     `;
@@ -427,7 +459,6 @@ export async function scheduleNextLoopJob(input: {
   accountId: string;
   completedAt?: Date;
   runAt?: Date;
-  startAt?: Date;
 }) {
   return getSqlClient().begin(async (sql) => {
     // Serializa o agendamento por loop: contas agendadas juntas enxergam a mídia que as outras já pegaram.
@@ -444,13 +475,15 @@ export async function scheduleNextLoopJob(input: {
       videos_since_image: number;
       finished: boolean;
       account_status: string;
+      joined_at: Date;
     }>>`
       SELECT loop.campaign_id, loop.status, loop.media_type, loop.image_every_n, loop.no_repeat,
         loop.min_interval_minutes, loop.max_interval_minutes, loop.daily_limit_per_account,
         loop.auto_comment_text, loop.auto_comment_delay_minutes, loop.tiered_limits,
         loop.tier_follower_threshold, loop.tier1_daily_limit, loop.tier1_min_interval_minutes,
         loop.tier1_max_interval_minutes, metrics.followers_count,
-        state.used_media_ids, state.videos_since_image, state.finished, account.status AS account_status, account.is_new_account
+        state.used_media_ids, state.videos_since_image, state.finished, account.status AS account_status, account.is_new_account,
+        account.warmup_profile, account.created_at AS account_created_at, selected_account.created_at AS joined_at
       FROM loop_account_state state
       JOIN loops loop ON loop.organization_id = state.organization_id AND loop.id = state.loop_id
       JOIN loop_accounts selected_account ON selected_account.organization_id = state.organization_id
@@ -492,7 +525,11 @@ export async function scheduleNextLoopJob(input: {
       SELECT default_timezone FROM settings WHERE organization_id = ${input.organizationId}
     `;
     const timezone = preferences?.default_timezone ?? "America/Sao_Paulo";
-    const scheduledAt = input.runAt ?? await loopScheduleAt(sql, { ...input, timezone, limits: loopAccountLimits(state) });
+    const loopAt = input.runAt ?? await loopScheduleAt(sql, { ...input, timezone, limits: loopAccountLimits(state),
+      baseLimits: loopAccountLimits(state, false), joinedAt: state.joined_at });
+    const warmupAt = await accountWarmupAllowedAt(sql, { organizationId: input.organizationId, accountId: input.accountId,
+      profile: state.warmup_profile, connectedAt: state.account_created_at, normalLimit: loopAccountLimits(state).dailyLimit });
+    const scheduledAt = input.runAt ?? new Date(Math.max(loopAt.getTime(), warmupAt.getTime()));
 
     // "Hoje" é o dia local em que o job vai rodar: se o limite empurrou para amanhã, conta o uso de amanhã.
     const publishDay = localDayBounds(scheduledAt, timezone);
@@ -539,12 +576,12 @@ export async function scheduleNextLoopJob(input: {
     const [job] = await sql<Array<{ id: string }>>`
       INSERT INTO publication_jobs (
         organization_id, campaign_id, loop_id, direct_media_asset_id, publication_type_override,
-        instagram_account_id, publication_position, scheduled_at, status, max_attempts,
+        instagram_account_id, publication_position, scheduled_at, warmup_daily_limit, status, max_attempts,
         auto_comment_text, auto_comment_delay_minutes, auto_comment_max_attempts
       ) VALUES (
         ${input.organizationId}, ${state.campaign_id}, ${input.loopId}, ${choice.selected.media_asset_id},
         ${publicationTypeFor(choice.selected)}::publication_type, ${input.accountId}, 0,
-        ${scheduledAt.toISOString()}, 'QUEUED', ${getEnv().MAX_PUBLICATION_ATTEMPTS},
+        ${scheduledAt.toISOString()}, ${accountWarmup(state.warmup_profile, state.account_created_at)?.dailyLimit ?? null}, 'QUEUED', ${getEnv().MAX_PUBLICATION_ATTEMPTS},
         ${state.auto_comment_text || null}, ${state.auto_comment_delay_minutes}, ${getEnv().MAX_PUBLICATION_ATTEMPTS}
       )
       RETURNING id
@@ -553,16 +590,14 @@ export async function scheduleNextLoopJob(input: {
   });
 }
 
-// Primeira rodada espaçada: cada conta agendada começa 2 a 5 minutos depois da anterior.
+// Cada conta aguarda o intervalo do loop desde sua inclusão, inclusive na primeira postagem.
 async function scheduleLoopAccounts(organizationId: string, loopId: string, accountIds: string[]) {
-  let startAt = Date.now();
   let scheduledCount = 0;
   const failedAccountIds: string[] = [];
   for (const accountId of accountIds) {
     try {
-      if (await scheduleNextLoopJob({ organizationId, loopId, accountId, startAt: new Date(startAt) })) {
+      if (await scheduleNextLoopJob({ organizationId, loopId, accountId })) {
         scheduledCount++;
-        startAt += randomInt(120, 301) * 1000;
       }
     } catch {
       failedAccountIds.push(accountId);
@@ -580,6 +615,7 @@ export async function reconcileActiveLoops() {
   `;
   let scheduled = 0;
   for (const row of rows) {
+    await getSqlClient().begin((sql) => reschedulePendingLoopJobs(sql, row.organization_id, [row.instagram_account_id], false));
     if (await scheduleNextLoopJob({
       organizationId: row.organization_id,
       loopId: row.loop_id,

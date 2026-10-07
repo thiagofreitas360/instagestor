@@ -169,6 +169,20 @@
       "when": 1791388483288,
       "tag": "0023_third_lester",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791405369570,
+      "tag": "0024_kind_wilson_fisk",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791406203282,
+      "tag": "0025_cultured_magik",
+      "breakpoints": true
     }
   ]
 }

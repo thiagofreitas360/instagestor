@@ -19,7 +19,9 @@ import { loadAnalytics, resolvePeriod } from "@/server/analytics";
 import { requireAdmin } from "@/server/auth";
 import { listMetaApps } from "@/server/meta-apps";
 import { InstagramConnectButton } from "@/components/instagram-connect-button";
-import { AccountNewStatusForm } from "@/components/account-bulk-selection";
+import { AccountNewStatusForm, AccountWarmupForm } from "@/components/account-bulk-selection";
+import { AccountWarmupBadge } from "@/components/account-warmup-badge";
+import { accountWarmup, type WarmupProfile } from "@/lib/account-warmup";
 
 type Account = {
   id: string;
@@ -29,6 +31,7 @@ type Account = {
   profile_picture_url: string | null;
   account_type: string | null;
   is_new_account: boolean;
+  warmup_profile: WarmupProfile | null;
   status: string;
   token_expires_at: Date | null;
   token_last_refreshed_at: Date | null;
@@ -74,7 +77,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
   const sql = getSqlClient();
   const [[account], groups, [stats], jobs, apps] = await Promise.all([
     sql<Account[]>`
-      SELECT id, instagram_user_id, username, display_name, profile_picture_url, account_type, status, is_new_account,
+      SELECT id, instagram_user_id, username, display_name, profile_picture_url, account_type, status, is_new_account, warmup_profile,
         token_expires_at, token_last_refreshed_at, token_last_checked_at,
         last_successful_api_call_at, last_error_at, last_error_code, last_error_message,
         publishing_limit_usage, publishing_limit_total, publishing_limit_checked_at, created_at,
@@ -107,6 +110,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
     listMetaApps(user.organizationId),
   ]);
   if (!account) notFound();
+  const warmup = accountWarmup(account.warmup_profile, account.created_at);
 
   const analytics = await loadAnalytics({ organizationId: user.organizationId, accountIds: [account.id], period: resolvePeriod(30) });
   const hasInsightsScope = account.granted_scopes?.includes("instagram_business_manage_insights") ?? false;
@@ -170,7 +174,8 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
         </span>
         <div className="account-hero-main">
           <StatusBadge status={account.status} />
-          {account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
+          <AccountWarmupBadge profile={account.warmup_profile} />
+          {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
           <p>Conta vinculada desde {formatDate(account.created_at, { dateOnly: true })}</p>
         </div>
         <DefinitionList
@@ -182,8 +187,10 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
         />
       </section>
 
-      <Panel title="Ritmo de publicação" description="Classificação manual da conta para os loops">
-        <AccountNewStatusForm key={String(account.is_new_account)} accountId={account.id} isNewAccount={account.is_new_account} />
+      <Panel title="Ritmo de publicação" description="Novas conexões recebem o perfil Balanceado automaticamente">
+        <AccountWarmupForm key={account.warmup_profile ?? "OFF"} accountId={account.id} profile={account.warmup_profile} />
+        {warmup?.active ? <p className="account-warmup-copy">Dia {warmup.day} de {warmup.durationDays} · teto da etapa: {warmup.dailyLimit} publicações por 24 horas, respeitando o limite menor do loop.</p> : warmup ? <p className="account-warmup-copy">Aquecimento concluído · ritmo normal.</p> : null}
+        {!account.warmup_profile && account.is_new_account ? <AccountNewStatusForm key={String(account.is_new_account)} accountId={account.id} isNewAccount={account.is_new_account} /> : null}
       </Panel>
 
       {account.last_error_message ? (

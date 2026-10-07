@@ -12,22 +12,24 @@ import { markAccountUnavailableIfCurrent } from "@/jobs/account-availability";
 import { audit } from "./auth";
 import { getMetaAppCredentials } from "./meta-apps";
 import { reschedulePendingLoopJobs } from "./automation";
+import type { WarmupProfile } from "@/lib/account-warmup";
 
 const FAKE_SCOPES = ["instagram_business_basic", "instagram_business_content_publish", INSIGHTS_SCOPE, COMMENTS_SCOPE];
 type Sql = TransactionSql;
 
-export async function setAccountsNewStatus(accountIds: string[], isNewAccount: boolean, actorUserId: string, organizationId: string) {
+export async function setAccountsNewStatus(accountIds: string[], isNewAccount: boolean, actorUserId: string, organizationId: string, warmupProfile: WarmupProfile | null = null) {
   const ids = [...new Set(z.array(z.uuid()).min(1, "Selecione ao menos uma conta").parse(accountIds))].sort();
   z.boolean().parse(isNewAccount);
+  z.enum(["FAST", "BALANCED", "CONSERVATIVE"]).nullable().parse(warmupProfile);
   return getSqlClient().begin(async (sql) => {
     // Mesma ordem da edição de loop: contas antes dos loops, sempre ordenadas por ID.
-    const accounts = await sql<Array<{ id: string; is_new_account: boolean }>>`
-      SELECT id, is_new_account FROM instagram_accounts
+    const accounts = await sql<Array<{ id: string; is_new_account: boolean; warmup_profile: WarmupProfile | null }>>`
+      SELECT id, is_new_account, warmup_profile FROM instagram_accounts
       WHERE organization_id = ${organizationId} AND id = ANY(${ids}::uuid[])
       ORDER BY id FOR UPDATE
     `;
     if (accounts.length !== ids.length) throw new Error("Uma ou mais contas não existem ou pertencem a outro cliente");
-    const changed = accounts.filter((account) => account.is_new_account !== isNewAccount);
+    const changed = accounts.filter((account) => account.is_new_account !== isNewAccount || account.warmup_profile !== warmupProfile);
     if (!changed.length) return { changed: 0, unchanged: ids.length };
     const changedIds = changed.map((account) => account.id);
     await sql`
@@ -38,14 +40,21 @@ export async function setAccountsNewStatus(accountIds: string[], isNewAccount: b
       ) ORDER BY loop.id FOR UPDATE OF loop
     `;
     await sql`
-      UPDATE instagram_accounts SET is_new_account = ${isNewAccount}, updated_at = now()
+      UPDATE instagram_accounts SET is_new_account = ${isNewAccount}, warmup_profile = ${warmupProfile}, updated_at = now()
       WHERE organization_id = ${organizationId} AND id = ANY(${changedIds}::uuid[])
     `;
     const jobs = await reschedulePendingLoopJobs(sql, organizationId, changedIds);
+    await sql`
+      UPDATE publication_jobs SET next_attempt_at = greatest(now(), scheduled_at), updated_at = now()
+      WHERE organization_id = ${organizationId} AND instagram_account_id = ANY(${changedIds}::uuid[])
+        AND loop_id IS NULL AND status = 'RETRY_WAIT' AND last_error_code = 'ACCOUNT_WARMUP_WAIT'
+        AND locked_by IS NULL
+    `;
     await sql`INSERT INTO audit_logs ${sql(changed.map((account) => ({
       organization_id: organizationId, actor_user_id: actorUserId,
       event_type: "ACCOUNT_NEW_STATUS_UPDATED", entity_type: "instagram_account", entity_id: account.id,
       metadata_json: JSON.stringify({ previousValue: account.is_new_account, isNewAccount,
+        previousProfile: account.warmup_profile, warmupProfile,
         jobs: jobs.filter((job) => job.accountId === account.id) }),
     })))}`;
     return { changed: changed.length, unchanged: ids.length - changed.length };

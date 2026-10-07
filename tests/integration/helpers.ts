@@ -38,6 +38,7 @@ export async function createAccounts(count: number, prefix = "account", organiza
     instagram_user_id: `${prefix}-instagram-${index.toString().padStart(3, "0")}`,
     username: `${prefix}_${index.toString().padStart(3, "0")}`,
     status: "CONNECTED",
+    warmup_profile: null,
   }));
 
   return sql<SeedAccount[]>`
@@ -84,7 +85,7 @@ export async function createJobs(
     instagram_account_id: account.id,
     scheduled_at: (options.scheduledAt ?? new Date(Date.now() - 60_000)).toISOString(),
     status: options.status ?? "QUEUED",
-    next_attempt_at: options.nextAttemptAt ?? null,
+    next_attempt_at: options.nextAttemptAt?.toISOString() ?? null,
     locked_at: options.lockedBy ? new Date(Date.now() - 120_000).toISOString() : null,
     locked_by: options.lockedBy ?? null,
     lock_expires_at: options.lockExpiresAt?.toISOString() ?? null,

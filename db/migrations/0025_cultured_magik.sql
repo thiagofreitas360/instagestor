@@ -1,0 +1,1 @@
+ALTER TABLE "loop_accounts" ADD COLUMN "first_post_at" timestamp with time zone;

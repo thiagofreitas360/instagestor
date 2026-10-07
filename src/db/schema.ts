@@ -174,6 +174,7 @@ export const instagramAccounts = pgTable(
     profilePictureUrl: text("profile_picture_url"),
     accountType: text("account_type"),
     isNewAccount: boolean("is_new_account").notNull().default(false),
+    warmupProfile: text("warmup_profile").$type<"FAST" | "BALANCED" | "CONSERVATIVE">().default("BALANCED"),
     status: instagramAccountStatus("status").notNull().default("CONNECTED"),
     encryptedAccessToken: text("encrypted_access_token"),
     authorizedAt: timestamp("authorized_at", { withTimezone: true }).defaultNow().notNull(),
@@ -200,6 +201,7 @@ export const instagramAccounts = pgTable(
   },
   (table) => [
     unique("instagram_accounts_organization_id_unique").on(table.organizationId, table.id),
+    check("instagram_accounts_warmup_profile_valid", sql`${table.warmupProfile} IS NULL OR ${table.warmupProfile} IN ('FAST', 'BALANCED', 'CONSERVATIVE')`),
     index("instagram_accounts_organization_status_idx").on(table.organizationId, table.status),
     index("instagram_accounts_organization_username_idx").on(table.organizationId, table.username),
   ],
@@ -341,6 +343,7 @@ export const loopAccounts = pgTable(
     organizationId: uuid("organization_id").notNull(),
     loopId: uuid("loop_id").notNull().references(() => loops.id, { onDelete: "cascade" }),
     instagramAccountId: uuid("instagram_account_id").notNull().references(() => instagramAccounts.id, { onDelete: "cascade" }),
+    firstPostAt: timestamp("first_post_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -646,6 +649,7 @@ export const publicationJobs = pgTable(
       .references(() => instagramAccounts.id, { onDelete: "restrict" }),
     publicationPosition: integer("publication_position").notNull().default(0),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
+    warmupDailyLimit: integer("warmup_daily_limit"),
     status: publicationJobStatus("status").notNull().default("QUEUED"),
     attemptCount: integer("attempt_count").notNull().default(0),
     maxAttempts: integer("max_attempts").notNull().default(5),
