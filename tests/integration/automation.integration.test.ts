@@ -111,6 +111,29 @@ describe("loops", () => {
     }))).resolves.toMatchObject({ scheduledCount: 1 });
   });
 
+  it("re-adds an account previously removed from the same loop", async () => {
+    const actorUserId = await createUser("readd-loop@example.test");
+    const accounts = await createAccounts(2, "readd_loop");
+    const media = await createMedia("VIDEO", 1);
+    const input = (accountIds: string[]) => loopInput({ actorUserId, name: "Loop readição", accountIds, media });
+    const created = await createLoop(input(accounts.map((account) => account.id)));
+
+    await updateLoop(created.loopId, input([accounts[1].id]));
+    const [orphan] = await getSqlClient()`
+      SELECT 1 FROM loop_account_state WHERE loop_id = ${created.loopId} AND instagram_account_id = ${accounts[0].id}
+    `;
+    expect(orphan).toBeUndefined();
+    await getSqlClient()`
+      INSERT INTO loop_account_state (organization_id, loop_id, instagram_account_id, finished)
+      VALUES (${TEST_ORGANIZATION_ID}, ${created.loopId}, ${accounts[0].id}, true)
+    `;
+    await expect(updateLoop(created.loopId, input(accounts.map((account) => account.id)))).resolves.toBeUndefined();
+    const [state] = await getSqlClient()<Array<{ finished: boolean }>>`
+      SELECT finished FROM loop_account_state WHERE loop_id = ${created.loopId} AND instagram_account_id = ${accounts[0].id}
+    `;
+    expect(state.finished).toBe(false);
+  });
+
   it("accepts only media from the selected folder and protects folders in use", async () => {
     const actorUserId = await createUser("folder-loop@example.test");
     const [account] = await createAccounts(1, "folder_loop");

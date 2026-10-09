@@ -734,6 +734,7 @@ export async function updateLoop(loopId: string, input: LoopInput) {
     }
     if (removedAccountIds.length) {
       await sql`DELETE FROM loop_accounts WHERE organization_id = ${input.organizationId} AND loop_id = ${loopId} AND instagram_account_id = ANY(${removedAccountIds}::uuid[])`;
+      await sql`DELETE FROM loop_account_state WHERE organization_id = ${input.organizationId} AND loop_id = ${loopId} AND instagram_account_id = ANY(${removedAccountIds}::uuid[])`;
     }
     if (addedAccountIds.length) {
       await sql`INSERT INTO loop_accounts ${sql(addedAccountIds.map((accountId) => ({
@@ -741,11 +742,14 @@ export async function updateLoop(loopId: string, input: LoopInput) {
         loop_id: loopId,
         instagram_account_id: accountId,
       })))}`;
+      // Remoções antigas deixavam o estado órfão; readicionar a conta recomeça do zero.
       await sql`INSERT INTO loop_account_state ${sql(addedAccountIds.map((accountId) => ({
         organization_id: input.organizationId,
         loop_id: loopId,
         instagram_account_id: accountId,
-      })))}`;
+      })))}
+        ON CONFLICT (loop_id, instagram_account_id) DO UPDATE SET
+          used_media_ids = '{}', videos_since_image = 0, finished = false, updated_at = now()`;
     }
     if (removedMediaIds.length) {
       await sql`DELETE FROM loop_media WHERE organization_id = ${input.organizationId} AND loop_id = ${loopId} AND media_asset_id = ANY(${removedMediaIds}::uuid[])`;
