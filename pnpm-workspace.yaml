@@ -3,3 +3,7 @@ allowBuilds:
   esbuild: true
   sharp: true
   unrs-resolver: false
+
+# O host do deploy baixa do npm devagar; o padrão (60s, 2 tentativas) aborta os tarballs grandes do Next.
+fetchTimeout: 600000
+fetchRetries: 5
