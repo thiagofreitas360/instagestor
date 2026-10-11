@@ -22,8 +22,10 @@ import { InstagramConnectButton } from "@/components/instagram-connect-button";
 import { AccountNewStatusForm, AccountWarmupForm } from "@/components/account-bulk-selection";
 import { AccountWarmupBadge } from "@/components/account-warmup-badge";
 import { accountWarmup, type WarmupProfile } from "@/lib/account-warmup";
+import { AccountActivity } from "@/components/account-activity";
+import { activityDuration, type AccountActivityDates } from "@/lib/account-activity";
 
-type Account = {
+type Account = AccountActivityDates & {
   id: string;
   instagram_user_id: string;
   username: string;
@@ -75,12 +77,14 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
   const user = await requireAdmin();
   const [{ id }, query] = await Promise.all([params, searchParams]);
   const sql = getSqlClient();
-  const [[account], groups, [stats], jobs, apps] = await Promise.all([
+  const [[account], groups, [stats], jobs, apps, [lastPeriod]] = await Promise.all([
     sql<Account[]>`
       SELECT id, instagram_user_id, username, display_name, profile_picture_url, account_type, status, is_new_account, warmup_profile,
         token_expires_at, token_last_refreshed_at, token_last_checked_at,
         last_successful_api_call_at, last_error_at, last_error_code, last_error_message,
         publishing_limit_usage, publishing_limit_total, publishing_limit_checked_at, created_at,
+        authorized_at, active_started_at, active_ended_at, active_timing_estimated, disconnected_at,
+        now() AS activity_observed_at,
         banned_at, ban_reason, granted_scopes, insights_synced_at
       FROM instagram_accounts WHERE organization_id = ${user.organizationId} AND id = ${id} LIMIT 1
     `,
@@ -108,6 +112,12 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
       LIMIT 12
     `,
     listMetaApps(user.organizationId),
+    sql<Array<{ activity: { startedAt: string | null; endedAt: string; days: number | null; estimated: boolean } }>>`
+      SELECT metadata_json->'activity' AS activity FROM audit_logs
+      WHERE organization_id = ${user.organizationId} AND entity_type = 'instagram_account' AND entity_id = ${id}
+        AND metadata_json->'activity'->>'endedAt' IS NOT NULL
+      ORDER BY created_at DESC, id DESC LIMIT 1
+    `,
   ]);
   if (!account) notFound();
   const warmup = accountWarmup(account.warmup_profile, account.created_at);
@@ -176,7 +186,12 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
           <StatusBadge status={account.status} />
           <AccountWarmupBadge profile={account.warmup_profile} />
           {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
-          <p>Conta vinculada desde {formatDate(account.created_at, { dateOnly: true })}</p>
+          <p>Primeira conexão em {formatDate(account.created_at, { dateOnly: true })}</p>
+          <AccountActivity account={account} />
+          {["CONNECTED", "TOKEN_EXPIRING"].includes(account.status) && lastPeriod ? (
+            <p>Período anterior: {formatDate(lastPeriod.activity.startedAt, { dateOnly: true })} a {formatDate(lastPeriod.activity.endedAt, { dateOnly: true })}
+              {" · "}{activityDuration(lastPeriod.activity.days)}{lastPeriod.activity.estimated ? " (estimado)" : ""}</p>
+          ) : null}
         </div>
         <DefinitionList
           items={[

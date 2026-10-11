@@ -183,6 +183,13 @@
       "when": 1791406203282,
       "tag": "0025_cultured_magik",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1791756442048,
+      "tag": "0026_account_activity",
+      "breakpoints": true
     }
   ]
 }

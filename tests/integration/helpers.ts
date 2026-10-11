@@ -38,6 +38,7 @@ export async function createAccounts(count: number, prefix = "account", organiza
     instagram_user_id: `${prefix}-instagram-${index.toString().padStart(3, "0")}`,
     username: `${prefix}_${index.toString().padStart(3, "0")}`,
     status: "CONNECTED",
+    active_timing_estimated: false,
     warmup_profile: null,
   }));
 

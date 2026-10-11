@@ -59,6 +59,30 @@ export type AnalyticsResult = {
 type SumsRow = Omit<Totals, "followers" | "netChange" | "lost">;
 type FollowerBound = { instagram_account_id: string; followers: number; net_change: number };
 
+export async function findAnalyticsAccountIds(input: {
+  organizationId: string; accountId?: string; groupId?: string; loopId?: string; search?: string;
+}) {
+  const search = (input.search ?? "").trim().replace(/^@/, "").trim().toLocaleLowerCase("pt-BR");
+  const rows = await getSqlClient()<Array<{ id: string }>>`
+    SELECT account.id FROM instagram_accounts account
+    WHERE account.organization_id = ${input.organizationId}
+      AND (account.status <> 'DISCONNECTED' OR account.insights_synced_at IS NOT NULL)
+      AND (${input.accountId ?? null}::uuid IS NULL OR account.id = ${input.accountId ?? null}::uuid)
+      AND (${input.groupId ?? null}::uuid IS NULL OR EXISTS (
+        SELECT 1 FROM account_group_members member WHERE member.organization_id = account.organization_id
+          AND member.instagram_account_id = account.id AND member.group_id = ${input.groupId ?? null}::uuid
+      ))
+      AND (${input.loopId ?? null}::uuid IS NULL OR EXISTS (
+        SELECT 1 FROM loop_accounts linked WHERE linked.organization_id = account.organization_id
+          AND linked.instagram_account_id = account.id AND linked.loop_id = ${input.loopId ?? null}::uuid
+      ))
+      AND (${search} = '' OR strpos(lower(account.username), ${search}) > 0
+        OR strpos(lower(coalesce(account.display_name, '')), ${search}) > 0)
+    ORDER BY account.username
+  `;
+  return rows.map((row) => row.id);
+}
+
 // Por conta: último followers_count até `to` e base (último antes de `from`, senão o primeiro dentro do período).
 function followerBounds(organizationId: string, ids: string[] | null, from: string, to: string) {
   return getSqlClient()<FollowerBound[]>`
@@ -215,7 +239,7 @@ export async function loadAnalytics(input: {
 export type BanRecord = {
   id: string; account_id: string; username: string; display_name: string | null; status: string; banned_at: Date;
   reason: string | null; followers_count: number | null; published_by_tool: number | null; last_error_code: string | null;
-  last_error_at: string | null; days_alive: number;
+  last_error_at: string | null; days_alive: number; active_days: number | null; activity_estimated: boolean | null;
 };
 
 export async function loadBanHistory(organizationId: string) {
@@ -226,6 +250,8 @@ export async function loadBanHistory(organizationId: string) {
       (log.metadata_json->>'publishedByTool')::int AS published_by_tool,
       log.metadata_json->>'lastErrorCode' AS last_error_code,
       log.metadata_json->>'lastErrorAt' AS last_error_at,
+      (log.metadata_json->'activity'->>'days')::int AS active_days,
+      (log.metadata_json->'activity'->>'estimated')::boolean AS activity_estimated,
       floor(extract(epoch FROM (log.created_at - account.created_at)) / 86400)::int AS days_alive
     FROM audit_logs log
     JOIN instagram_accounts account ON account.organization_id = log.organization_id AND account.id::text = log.entity_id
@@ -242,6 +268,7 @@ export async function loadBanHistory(organizationId: string) {
     // production — coerce before calling Date methods so both shapes work.
     last30: records.filter((record) => new Date(record.banned_at).getTime() >= cutoff).length,
     avgDaysAlive: average(records.map((record) => record.days_alive)),
+    avgActiveDays: average(records.flatMap((record) => record.active_days !== null && record.activity_estimated === false ? [record.active_days] : [])),
     avgFollowers: average(records.flatMap((record) => (record.followers_count === null ? [] : [record.followers_count]))),
   };
 }

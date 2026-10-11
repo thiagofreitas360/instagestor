@@ -6,11 +6,13 @@ import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { InstagramConnectButton } from "@/components/instagram-connect-button";
 import { AccountBulkSelection } from "@/components/account-bulk-selection";
 import { AccountWarmupBadge } from "@/components/account-warmup-badge";
+import { AccountActivity } from "@/components/account-activity";
+import type { AccountActivityDates } from "@/lib/account-activity";
 import { accountWarmup, WARMUP_PROFILES, type WarmupProfile } from "@/lib/account-warmup";
 import { requireAdmin } from "@/server/auth";
 import { listMetaApps } from "@/server/meta-apps";
 
-type AccountRow = {
+type AccountRow = AccountActivityDates & {
   id: string;
   username: string;
   display_name: string | null;
@@ -30,11 +32,12 @@ type AccountRow = {
   last_error_message: string | null;
   group_ids: string[];
   meta_app_name: string | null;
+  has_loop: boolean;
 };
 type GroupRow = { id: string; name: string };
 
 type PageProps = {
-  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[]; perfil?: string | string[] }>;
+  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[]; perfil?: string | string[]; vinculo?: string | string[] }>;
 };
 
 function first(value?: string | string[]) {
@@ -49,6 +52,11 @@ export default async function AccountsPage({ searchParams }: PageProps) {
     sql<AccountRow[]>`
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.account_type, account.status,
         account.token_expires_at, account.is_new_account, account.warmup_profile, account.created_at,
+        account.instagram_user_id, account.authorized_at, account.active_started_at, account.active_ended_at,
+        account.active_timing_estimated, account.disconnected_at, account.banned_at,
+        now() AS activity_observed_at,
+        EXISTS (SELECT 1 FROM loop_accounts linked WHERE linked.organization_id = account.organization_id
+          AND linked.instagram_account_id = account.id) AS has_loop,
         account.last_error_at, account.last_error_message,
         account.publishing_limit_usage, account.publishing_limit_total,
         coalesce(array_agg(DISTINCT group_row.name ORDER BY group_row.name)
@@ -80,6 +88,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const connected = accounts.filter((account) => ["CONNECTED", "TOKEN_EXPIRING"].includes(account.status)).length;
   const needsAttention = accounts.filter((account) => ["REAUTH_REQUIRED", "ERROR"].includes(account.status)).length;
   const selectedFilter = first(params.filtro) ?? "todas";
+  const unlinked = first(params.vinculo) === "nao_vinculadas";
   const requestedNiche = first(params.nicho);
   const selectedNiche = groups.some((group) => group.id === requestedNiche) ? requestedNiche : undefined;
   const search = (first(params.busca) ?? "").trim();
@@ -91,6 +100,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const isNew = (account: AccountRow) => Boolean(accountWarmup(account.warmup_profile, account.created_at)?.active
     || (!account.warmup_profile && account.is_new_account));
   const matchingAccounts = accounts.filter((account) => {
+    if (unlinked && account.has_loop) return false;
     if (selectedProfile && (account.warmup_profile ?? "OFF") !== selectedProfile) return false;
     if (selectedNiche && !account.group_ids.includes(selectedNiche)) return false;
     if (normalizedSearch && !account.username.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
@@ -106,6 +116,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const filteredAccounts = matchingAccounts.filter((account) => selectedType === "todas"
     || isNew(account) === (selectedType === "novas"));
   const returnParams = new URLSearchParams({
+    ...(unlinked ? { vinculo: "nao_vinculadas" } : {}),
     ...(selectedFilter !== "todas" ? { filtro: selectedFilter } : {}),
     ...(selectedType !== "todas" ? { tipo: selectedType } : {}),
     ...(selectedProfile ? { perfil: selectedProfile } : {}),
@@ -130,6 +141,13 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         <label>
           Buscar conta
           <input name="busca" type="search" defaultValue={search} placeholder="@usuario ou nome" />
+        </label>
+        <label>
+          Vínculo com loop
+          <select name="vinculo" defaultValue={unlinked ? "nao_vinculadas" : ""}>
+            <option value="">Todas</option>
+            <option value="nao_vinculadas">Não vinculadas</option>
+          </select>
         </label>
         <label>
           Nicho / grupo
@@ -168,6 +186,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           <Link
             className={`button button-small ${selectedFilter === value ? "button-primary" : "button-secondary"}`}
             href={`/contas?${new URLSearchParams({
+              ...(unlinked ? { vinculo: "nao_vinculadas" } : {}),
               ...(value === "todas" ? {} : { filtro: value }),
               ...(selectedNiche ? { nicho: selectedNiche } : {}),
               ...(search ? { busca: search } : {}),
@@ -205,6 +224,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                   <th scope="col" className="account-select-cell"><input type="checkbox" data-select-all aria-label={`Selecionar todas as ${filteredAccounts.length} contas deste filtro`} /></th>
                   <th scope="col">Conta</th>
                   <th scope="col">Status</th>
+                  <th scope="col">Conexão / atividade</th>
                   <th scope="col">Limite de publicação</th>
                   <th scope="col">Nichos / grupos</th>
                   <th scope="col">Publicações</th>
@@ -250,6 +270,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                           </small>
                         ) : null}
                       </td>
+                      <td data-label="Conexão / atividade"><AccountActivity account={account} /></td>
                       <td data-label="Limite de publicação">
                         {total ? (
                           <div className="quota-cell">

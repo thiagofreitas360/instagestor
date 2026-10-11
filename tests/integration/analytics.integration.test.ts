@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { getSqlClient } from "@/db/client";
-import { loadAnalytics, loadBanHistory, resolvePeriod } from "@/server/analytics";
+import { findAnalyticsAccountIds, loadAnalytics, loadBanHistory, resolvePeriod } from "@/server/analytics";
 import { banAccount } from "@/server/accounts";
-import { createAccounts, createUser, TEST_ORGANIZATION_ID } from "./helpers";
+import { createAccounts, createCampaign, createOrganization, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 async function seedMetrics(accountId: string, rows: Array<{ daysAgo: number; followers?: number; gains?: number; reach?: number; views?: number; likes?: number }>) {
   const sql = getSqlClient();
@@ -16,6 +16,36 @@ async function seedMetrics(accountId: string, rows: Array<{ daysAgo: number; fol
 }
 
 describe("loadAnalytics", () => {
+  it("combina pesquisa, conta, grupo e loop pausado sem incluir outro cliente", async () => {
+    const sql = getSqlClient();
+    const actor = await createUser();
+    const [a, b, c] = await createAccounts(3, "filtered");
+    const otherOrg = await createOrganization();
+    const [foreign] = await createAccounts(1, "foreign", otherOrg);
+    const campaign = await createCampaign(actor);
+    const [loop] = await sql`INSERT INTO loops (organization_id, campaign_id, name, status, created_by)
+      VALUES (${TEST_ORGANIZATION_ID}, ${campaign}, 'Loop de análise', 'PAUSED', ${actor}) RETURNING id`;
+    const [group] = await sql`INSERT INTO account_groups (organization_id, name) VALUES (${TEST_ORGANIZATION_ID}, 'Grupo de análise') RETURNING id`;
+    await sql`INSERT INTO loop_accounts ${sql([a, b].map((account) => ({ organization_id: TEST_ORGANIZATION_ID, loop_id: loop.id, instagram_account_id: account.id })))}`;
+    await sql`INSERT INTO account_group_members ${sql([a, c].map((account) => ({ organization_id: TEST_ORGANIZATION_ID, group_id: group.id, instagram_account_id: account.id })))}`;
+    await sql`UPDATE instagram_accounts SET display_name = 'Loja Principal', insights_synced_at = now() WHERE id = ${a.id}`;
+    await seedMetrics(a.id, [{ daysAgo: 0, reach: 12, views: 34 }]);
+    await seedMetrics(b.id, [{ daysAgo: 0, reach: 50, views: 100 }]);
+    const scope = { organizationId: TEST_ORGANIZATION_ID, loopId: loop.id, groupId: group.id };
+    const ids = await findAnalyticsAccountIds({ ...scope, search: ' PRINCIPAL ' });
+    expect(ids).toEqual([a.id]);
+    expect(await findAnalyticsAccountIds({ ...scope, search: ` @${a.username.toUpperCase()} ` })).toEqual(ids);
+    expect(await findAnalyticsAccountIds({ ...scope, accountId: c.id })).toEqual([]);
+    expect(await findAnalyticsAccountIds({ ...scope, accountId: foreign.id })).toEqual([]);
+    const data = await loadAnalytics({ organizationId: TEST_ORGANIZATION_ID, accountIds: ids, period: resolvePeriod(7) });
+    expect(data.totals).toMatchObject({ reach: 12, views: 34 });
+    expect(data.ranking.map((row) => row.id)).toEqual(ids);
+    const empty = await loadAnalytics({ organizationId: TEST_ORGANIZATION_ID, accountIds: [], period: resolvePeriod(7) });
+    expect(empty.totals.reach).toBe(0);
+    expect(empty.ranking).toEqual([]);
+    expect(empty.media).toEqual([]);
+    expect(empty.missingScope).toEqual([]);
+  });
   it("agregado soma os individuais e calcula ganhos, perdidos e variação", async () => {
     const sql = getSqlClient();
     const [a, b] = await createAccounts(2, "an");

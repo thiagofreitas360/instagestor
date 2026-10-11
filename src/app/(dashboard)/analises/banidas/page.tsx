@@ -20,6 +20,7 @@ export default async function BannedAccountsPage() {
         <MetricCard label="Total de banimentos" value={history.total} tone={history.total ? "danger" : "default"} />
         <MetricCard label="Nos últimos 30 dias" value={history.last30} />
         <MetricCard label="Média de dias de vida" value={history.avgDaysAlive === null ? "—" : formatNumber(history.avgDaysAlive)} />
+        <MetricCard label="Média de dias ativos" value={history.avgActiveDays === null ? "—" : formatNumber(history.avgActiveDays)} detail="Somente períodos com registro exato" />
         <MetricCard label="Média de seguidores no ban" value={formatNumber(history.avgFollowers)} />
       </section>
       <Panel>
@@ -33,6 +34,7 @@ export default async function BannedAccountsPage() {
                   <th scope="col">Motivo</th>
                   <th scope="col">Seguidores</th>
                   <th scope="col">Dias de vida</th>
+                  <th scope="col">Dias ativos</th>
                   <th scope="col">Publicações via ferramenta</th>
                   <th scope="col">Último erro da Meta</th>
                   <th scope="col">Situação atual</th>
@@ -46,6 +48,7 @@ export default async function BannedAccountsPage() {
                     <td data-label="Motivo" className="cell-wrap">{record.reason ?? "—"}</td>
                     <td data-label="Seguidores">{formatNumber(record.followers_count)}</td>
                     <td data-label="Dias de vida">{formatNumber(record.days_alive)}</td>
+                    <td data-label="Dias ativos">{formatNumber(record.active_days)}{record.activity_estimated && record.active_days !== null ? <small>Estimado</small> : null}</td>
                     <td data-label="Publicações via ferramenta">{formatNumber(record.published_by_tool)}</td>
                     <td data-label="Último erro da Meta" className="cell-wrap">
                       {record.last_error_code ? (

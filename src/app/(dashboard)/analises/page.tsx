@@ -5,7 +5,7 @@ import { getSqlClient } from "@/db/client";
 import { BarChart, LineChart } from "@/components/charts";
 import { Delta, EmptyState, formatDate, formatNumber, MessageBanner, MetricCard, PageHeader, Panel, StatusBadge, initials } from "@/components/ui";
 import {
-  deltaPercent, loadAnalytics, MEDIA_ORDERS, RANKING_ORDERS, resolvePeriod,
+  deltaPercent, findAnalyticsAccountIds, loadAnalytics, MEDIA_ORDERS, RANKING_ORDERS, resolvePeriod,
   type MediaOrder, type MediaRow, type PeriodDays, type RankingOrder, type Totals,
 } from "@/server/analytics";
 import { requireAdmin } from "@/server/auth";
@@ -92,16 +92,18 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
   const periodDays = PERIODS.find((days) => String(days) === first(query.periodo)) ?? 30;
   const accountId = z.uuid().safeParse(first(query.conta)).data;
   const groupId = z.uuid().safeParse(first(query.grupo)).data;
+  const loopId = z.uuid().safeParse(first(query.loop)).data;
+  const search = (first(query.busca) ?? "").trim();
   const mediaType = pick(first(query.tipo), ["FEED", "REELS", "STORY"] as const);
   const rankingOrder: RankingOrder = pick(first(query.ordem), RANKING_ORDERS) ?? "reach";
   const mediaOrder: MediaOrder = pick(first(query.ordem_midia), MEDIA_ORDERS) ?? "views";
   const base = {
-    periodo: String(periodDays), conta: accountId, grupo: accountId ? undefined : groupId, tipo: mediaType,
+    periodo: String(periodDays), conta: accountId, grupo: groupId, loop: loopId, busca: search || undefined, tipo: mediaType,
     ordem: rankingOrder === "reach" ? undefined : rankingOrder, ordem_midia: mediaOrder === "views" ? undefined : mediaOrder,
   };
 
   const sql = getSqlClient();
-  const [accounts, groups, apps] = await Promise.all([
+  const [accounts, groups, loops, apps] = await Promise.all([
     sql<Array<{ id: string; username: string; display_name: string | null; profile_picture_url: string | null; status: string; biography: string | null; website: string | null; followers_count: number | null; follows_count: number | null; media_count: number | null }>>`
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.status, account.biography, account.website,
         latest.followers_count, latest.follows_count, latest.media_count
@@ -118,24 +120,25 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
     sql<Array<{ id: string; name: string }>>`
       SELECT id, name FROM account_groups WHERE organization_id = ${user.organizationId} ORDER BY name
     `,
+    sql<Array<{ id: string; name: string; status: string }>>`
+      SELECT id, name, status FROM loops WHERE organization_id = ${user.organizationId} ORDER BY name
+    `,
     listMetaApps(user.organizationId),
   ]);
 
-  const selectedAccount = accountId ? accounts.find((account) => account.id === accountId) : undefined;
-  const selectedGroup = !selectedAccount && groupId ? groups.find((group) => group.id === groupId) : undefined;
-  let accountIds: string[] | null = null;
-  let title = "Todas as contas";
-  if (selectedAccount) {
-    accountIds = [selectedAccount.id];
-    title = selectedAccount.display_name ?? `@${selectedAccount.username}`;
-  } else if (selectedGroup) {
-    const members = await sql<Array<{ instagram_account_id: string }>>`
-      SELECT instagram_account_id FROM account_group_members
-      WHERE organization_id = ${user.organizationId} AND group_id = ${selectedGroup.id}
-    `;
-    accountIds = members.map((member) => member.instagram_account_id);
-    title = `Grupo ${selectedGroup.name}`;
-  }
+  const requestedAccount = accountId ? accounts.find((account) => account.id === accountId) : undefined;
+  const selectedGroup = groups.find((group) => group.id === groupId);
+  const selectedLoop = loops.find((loop) => loop.id === loopId);
+  const filterError = (first(query.conta) && !requestedAccount) || (first(query.grupo) && !selectedGroup)
+    || (first(query.loop) && !selectedLoop) ? "Filtro inválido: conta, grupo ou loop não encontrado." : undefined;
+  const hasFilters = Boolean(search || first(query.conta) || first(query.grupo) || first(query.loop));
+  const accountIds = filterError ? [] : hasFilters
+    ? await findAnalyticsAccountIds({ organizationId: user.organizationId, accountId, groupId, loopId, search }) : null;
+  const selectedAccount = requestedAccount && accountIds?.includes(requestedAccount.id) ? requestedAccount : undefined;
+  const noMatchingAccounts = accountIds?.length === 0;
+  const title = selectedAccount ? selectedAccount.display_name ?? `@${selectedAccount.username}`
+    : [selectedLoop ? `Loop ${selectedLoop.name}` : "", selectedGroup ? `Grupo ${selectedGroup.name}` : "",
+      search ? `Busca: ${search}` : ""].filter(Boolean).join(" · ") || "Todas as contas";
 
   const period = resolvePeriod(periodDays);
   const data = await loadAnalytics({ organizationId: user.organizationId, accountIds, period, mediaType, rankingOrder, mediaOrder });
@@ -164,7 +167,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
           </>
         }
       />
-      <MessageBanner error={first(query.erro)} success={first(query.ok)} />
+      <MessageBanner error={filterError ?? first(query.erro)} success={first(query.ok)} />
       {stale ? (
         <div className="message-banner message-error" role="status">
           <strong>Sync atrasado</strong>
@@ -173,6 +176,18 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
       ) : null}
 
       <form className="analytics-filters" method="get" action="/analises">
+        {mediaType ? <input type="hidden" name="tipo" value={mediaType} /> : null}
+        <input type="hidden" name="ordem" value={rankingOrder} />
+        <input type="hidden" name="ordem_midia" value={mediaOrder} />
+        <label>
+          Buscar conta
+          <span className="analytics-search">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" />
+            </svg>
+            <input type="search" name="busca" defaultValue={search} placeholder="@usuário ou nome" />
+          </span>
+        </label>
         <label>
           Período
           <select name="periodo" defaultValue={String(periodDays)}>
@@ -181,7 +196,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
         </label>
         <label>
           Conta
-          <select name="conta" defaultValue={selectedAccount?.id ?? ""}>
+          <select name="conta" defaultValue={requestedAccount?.id ?? ""}>
             <option value="">Todas</option>
             {accounts.map((account) => <option key={account.id} value={account.id}>@{account.username}</option>)}
           </select>
@@ -193,8 +208,16 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
             {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
           </select>
         </label>
+        <label>
+          Loop inteligente
+          <select name="loop" defaultValue={selectedLoop?.id ?? ""}>
+            <option value="">Todos os loops</option>
+            {loops.map((loop) => <option key={loop.id} value={loop.id}>{loop.name}{loop.status === "PAUSED" ? " (pausado)" : ""}</option>)}
+          </select>
+        </label>
         <button className="button button-primary" type="submit">Aplicar</button>
       </form>
+      {selectedLoop ? <p className="muted">Desempenho geral das contas vinculadas atualmente a este loop, incluindo publicações manuais.</p> : null}
 
       {data.missingScope.length ? (
         <Panel title={`${data.missingScope.length} conta(s) precisam reconectar para habilitar análises`} description="A permissão de insights só é concedida em uma nova conexão via Meta.">
@@ -230,7 +253,9 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
         </section>
       ) : null}
 
-      {nothingToShow ? (
+      {noMatchingAccounts ? (
+        <EmptyState title="Nenhuma conta encontrada para esses filtros" description="Ajuste a busca, conta, grupo ou loop selecionado." />
+      ) : nothingToShow ? (
         <EmptyState
           title="Nenhuma conta com análises"
           description="Conecte (ou reconecte) contas concedendo a permissão de insights. O worker sincroniza automaticamente em até 1 minuto."
@@ -290,7 +315,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
                   <tbody>
                     {data.ranking.map((row) => (
                       <tr key={row.id}>
-                        <td data-label="Conta"><Link className="table-primary-link" href={buildHref(base, { conta: row.id, grupo: undefined })}>@{row.username}</Link></td>
+                        <td data-label="Conta"><Link className="table-primary-link" href={buildHref(base, { conta: row.id })}>@{row.username}</Link></td>
                         <td data-label="Status"><StatusBadge status={row.status} /></td>
                         <td data-label="Seguidores">{formatNumber(row.followers)}</td>
                         <td data-label="Δ seguidores">{row.net_change === null ? "—" : `${row.net_change > 0 ? "+" : ""}${formatNumber(row.net_change)}`}</td>

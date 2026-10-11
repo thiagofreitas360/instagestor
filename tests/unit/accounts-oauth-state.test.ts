@@ -107,7 +107,7 @@ describe("reconexão OAuth", () => {
     const upsertSql = (mocks.sqlCalls[2][0] as TemplateStringsArray).join(" ");
     expect(upsertSql).toContain("ON CONFLICT (instagram_user_id) DO UPDATE");
     expect(mocks.sqlCalls[2]).not.toContain("token-meta-secreto");
-    expect(mocks.audit).toHaveBeenCalledWith("org-1", "user-1", "ACCOUNT_RECONNECTED", "instagram_account", "account-7");
+    expect(mocks.sqlCalls[3].slice(1)).toEqual(["org-1", "user-1", "ACCOUNT_RECONNECTED", "account-7"]);
   });
 
   it("recusa reconexão quando a Meta devolve outra conta, sem gravar token", async () => {
@@ -150,7 +150,7 @@ describe("reconexão OAuth", () => {
 
     await connectFromAuthorizationCode("code-new", "state-new");
 
-    expect(mocks.audit).toHaveBeenCalledWith("org-1", "user-1", "ACCOUNT_CONNECTED", "instagram_account", "account-new");
+    expect(mocks.sqlCalls[3].slice(1)).toEqual(["org-1", "user-1", "ACCOUNT_CONNECTED", "account-new"]);
   });
 
   it("troca o código com o Meta App do state e grava o vínculo na conta", async () => {

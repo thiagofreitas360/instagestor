@@ -178,6 +178,9 @@ export const instagramAccounts = pgTable(
     status: instagramAccountStatus("status").notNull().default("CONNECTED"),
     encryptedAccessToken: text("encrypted_access_token"),
     authorizedAt: timestamp("authorized_at", { withTimezone: true }).defaultNow().notNull(),
+    activeStartedAt: timestamp("active_started_at", { withTimezone: true }).defaultNow(),
+    activeEndedAt: timestamp("active_ended_at", { withTimezone: true }),
+    activeTimingEstimated: boolean("active_timing_estimated").notNull().default(true),
     tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
     tokenLastRefreshedAt: timestamp("token_last_refreshed_at", { withTimezone: true }),
     tokenLastCheckedAt: timestamp("token_last_checked_at", { withTimezone: true }),
@@ -201,6 +204,7 @@ export const instagramAccounts = pgTable(
   },
   (table) => [
     unique("instagram_accounts_organization_id_unique").on(table.organizationId, table.id),
+    check("instagram_accounts_activity_dates_valid", sql`${table.activeEndedAt} IS NULL OR ${table.activeStartedAt} IS NULL OR ${table.activeEndedAt} >= ${table.activeStartedAt}`),
     check("instagram_accounts_warmup_profile_valid", sql`${table.warmupProfile} IS NULL OR ${table.warmupProfile} IN ('FAST', 'BALANCED', 'CONSERVATIVE')`),
     index("instagram_accounts_organization_status_idx").on(table.organizationId, table.status),
     index("instagram_accounts_organization_username_idx").on(table.organizationId, table.username),

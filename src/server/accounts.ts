@@ -13,6 +13,7 @@ import { audit } from "./auth";
 import { getMetaAppCredentials } from "./meta-apps";
 import { reschedulePendingLoopJobs } from "./automation";
 import type { WarmupProfile } from "@/lib/account-warmup";
+import { accountActivitySnapshot } from "./account-activity";
 
 const FAKE_SCOPES = ["instagram_business_basic", "instagram_business_content_publish", INSIGHTS_SCOPE, COMMENTS_SCOPE];
 type Sql = TransactionSql;
@@ -79,6 +80,7 @@ export async function createFakeAccounts(count: number, actorUserId: string, org
       display_name: `Conta ${position + 1}`,
       account_type: "BUSINESS",
       status: "CONNECTED",
+      active_timing_estimated: false,
       encrypted_access_token: encryptToken(`fake-token:${instagramUserId}:${username}`),
       token_expires_at: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
       token_last_refreshed_at: new Date().toISOString(),
@@ -143,14 +145,17 @@ export async function disconnectAccount(accountId: string, actorUserId: string, 
     await sql`SELECT pg_advisory_xact_lock(hashtextextended(${`instagestor:meta:account:${accountId}:0`}, 0))`;
     const [account] = await sql<{ id: string }[]>`
       UPDATE instagram_accounts SET status = 'DISCONNECTED', encrypted_access_token = NULL,
-        disconnected_at = now(), updated_at = now()
+        active_ended_at = coalesce(active_ended_at, CASE WHEN status IN ('CONNECTED', 'TOKEN_EXPIRING')
+          THEN now() ELSE least(disconnected_at, banned_at) END),
+        disconnected_at = coalesce(disconnected_at, now()), updated_at = now()
       WHERE organization_id = ${organizationId} AND id = ${accountId} RETURNING id
     `;
     if (!account) throw new Error("Conta não encontrada");
     await closeAccountJobs(sql, organizationId, accountId, "ACCOUNT_DISCONNECTED", "Conta desconectada");
     await sql`
-      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id)
-      VALUES (${organizationId}, ${actorUserId}, 'ACCOUNT_DISCONNECTED', 'instagram_account', ${accountId})
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id, metadata_json)
+      VALUES (${organizationId}, ${actorUserId}, 'ACCOUNT_DISCONNECTED', 'instagram_account', ${accountId},
+        ${JSON.stringify(await accountActivitySnapshot(sql, organizationId, accountId))}::jsonb)
     `;
   });
 }
@@ -177,13 +182,16 @@ export async function banAccount(accountId: string, reason: string, actorUserId:
     `;
     await sql`
       UPDATE instagram_accounts SET status = 'BANNED', encrypted_access_token = NULL, banned_at = now(),
-        ban_reason = ${trimmed}, disconnected_at = now(), updated_at = now()
+        active_ended_at = coalesce(active_ended_at, CASE WHEN status IN ('CONNECTED', 'TOKEN_EXPIRING')
+          THEN now() ELSE least(disconnected_at, banned_at) END),
+        ban_reason = ${trimmed}, disconnected_at = coalesce(disconnected_at, now()), updated_at = now()
       WHERE organization_id = ${organizationId} AND id = ${accountId}
     `;
     await closeAccountJobs(sql, organizationId, accountId, "ACCOUNT_BANNED", "Conta marcada como banida");
     await sql`
       INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id, metadata_json)
       VALUES (${organizationId}, ${actorUserId}, 'ACCOUNT_BANNED', 'instagram_account', ${accountId}, ${JSON.stringify({
+        ...await accountActivitySnapshot(sql, organizationId, accountId),
         reason: trimmed,
         followersCount: metrics?.followers_count ?? null,
         mediaCount: metrics?.media_count ?? null,
@@ -235,6 +243,11 @@ export async function verifyAccount(accountId: string, organizationId: string) {
       UPDATE instagram_accounts SET username = ${profile.username}, display_name = ${profile.displayName ?? null},
         profile_picture_url = ${profile.profilePictureUrl ?? null}, account_type = ${profile.accountType ?? null},
         app_scoped_user_id = COALESCE(${profile.appScopedUserId ?? null}, app_scoped_user_id),
+        active_started_at = CASE WHEN status IN ('CONNECTED', 'TOKEN_EXPIRING')
+          THEN coalesce(active_started_at, authorized_at) ELSE now() END,
+        active_timing_estimated = CASE WHEN status IN ('CONNECTED', 'TOKEN_EXPIRING')
+          THEN active_timing_estimated ELSE false END,
+        active_ended_at = NULL, disconnected_at = NULL,
         status = 'CONNECTED', token_last_checked_at = now(), last_successful_api_call_at = now(),
         publishing_limit_usage = ${limit.usage}, publishing_limit_total = ${limit.total},
         publishing_limit_checked_at = now(), last_error_at = NULL, last_error_code = NULL,
@@ -329,17 +342,23 @@ export async function connectFromAuthorizationCode(code: string, state: string) 
       INSERT INTO instagram_accounts (
         organization_id, instagram_user_id, app_scoped_user_id, username, display_name, profile_picture_url, account_type,
         status, encrypted_access_token, authorized_at, token_expires_at, token_last_refreshed_at, token_last_checked_at,
-        last_successful_api_call_at, disconnected_at, granted_scopes, banned_at, ban_reason, insights_synced_at, meta_app_id
+        last_successful_api_call_at, disconnected_at, granted_scopes, banned_at, ban_reason, insights_synced_at, meta_app_id,
+        active_started_at, active_timing_estimated
       ) VALUES (
         ${oauth.organization_id}, ${profile.id}, ${profile.appScopedUserId ?? exchanged.appScopedUserId}, ${profile.username},
         ${profile.displayName ?? null}, ${profile.profilePictureUrl ?? null}, ${profile.accountType ?? null},
         'CONNECTED', ${encrypted}, now(), now() + ${exchanged.expiresIn} * interval '1 second', now(), now(), now(), NULL,
-        ${exchanged.permissions}, NULL, NULL, NULL, ${oauth.meta_app_id ?? null}
+        ${exchanged.permissions}, NULL, NULL, NULL, ${oauth.meta_app_id ?? null}, now(), false
       )
       ON CONFLICT (instagram_user_id) DO UPDATE SET
         app_scoped_user_id = EXCLUDED.app_scoped_user_id, username = EXCLUDED.username,
         display_name = EXCLUDED.display_name, profile_picture_url = EXCLUDED.profile_picture_url,
         account_type = EXCLUDED.account_type, status = 'CONNECTED',
+        active_started_at = CASE WHEN instagram_accounts.status IN ('CONNECTED', 'TOKEN_EXPIRING')
+          THEN coalesce(instagram_accounts.active_started_at, instagram_accounts.authorized_at) ELSE now() END,
+        active_timing_estimated = CASE WHEN instagram_accounts.status IN ('CONNECTED', 'TOKEN_EXPIRING')
+          THEN instagram_accounts.active_timing_estimated ELSE false END,
+        active_ended_at = NULL,
         encrypted_access_token = EXCLUDED.encrypted_access_token, token_expires_at = EXCLUDED.token_expires_at,
         authorized_at = now(), token_last_refreshed_at = now(), token_last_checked_at = now(), last_successful_api_call_at = now(),
         disconnected_at = NULL, granted_scopes = EXCLUDED.granted_scopes, banned_at = NULL, ban_reason = NULL,
@@ -348,15 +367,13 @@ export async function connectFromAuthorizationCode(code: string, state: string) 
       RETURNING id, (xmax = 0) AS inserted
     `;
     if (!saved) throw new Error("Não foi possível vincular a conta à organização");
+    await sql`
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id)
+      VALUES (${oauth.organization_id}, ${oauth.initiated_by}, ${saved.inserted ? "ACCOUNT_CONNECTED" : "ACCOUNT_RECONNECTED"},
+        'instagram_account', ${saved.id})
+    `;
     return saved;
   });
-  await audit(
-    oauth.organization_id,
-    oauth.initiated_by,
-    account.inserted ? "ACCOUNT_CONNECTED" : "ACCOUNT_RECONNECTED",
-    "instagram_account",
-    account.id,
-  );
   return account.id;
 }
 
@@ -415,7 +432,9 @@ export async function deauthorizeBySignedRequest(signedRequest: string) {
 
     const [disconnected] = await sql<Array<{ id: string }>>`
       UPDATE instagram_accounts SET status = 'DISCONNECTED', encrypted_access_token = NULL,
-        disconnected_at = now(), updated_at = now()
+        active_ended_at = coalesce(active_ended_at, CASE WHEN status IN ('CONNECTED', 'TOKEN_EXPIRING')
+          THEN now() ELSE least(disconnected_at, banned_at) END),
+        disconnected_at = coalesce(disconnected_at, now()), updated_at = now()
       WHERE organization_id = ${account.organization_id} AND id = ${account.id}
         AND authorized_at <= to_timestamp(${issuedAt})
       RETURNING id
@@ -474,7 +493,7 @@ export async function deauthorizeBySignedRequest(signedRequest: string) {
       INSERT INTO audit_logs (organization_id, event_type, entity_type, entity_id, metadata_json)
       VALUES (
         ${account.organization_id}, 'ACCOUNT_DEAUTHORIZED', 'instagram_account', ${account.id},
-        ${JSON.stringify({ eventHash, issuedAt })}::jsonb
+        ${JSON.stringify({ eventHash, issuedAt, ...await accountActivitySnapshot(sql, account.organization_id, account.id) })}::jsonb
       )
     `;
   });
@@ -510,6 +529,10 @@ export async function deleteDataBySignedRequest(signedRequest: string) {
         `
       : [];
     if (account) {
+      await sql`
+        UPDATE audit_logs SET metadata_json = metadata_json - 'activity'
+        WHERE organization_id = ${account.organization_id} AND entity_type = 'instagram_account' AND entity_id = ${account.id}
+      `;
       await sql`DELETE FROM account_group_members WHERE organization_id = ${account.organization_id} AND instagram_account_id = ${account.id}`;
       await sql`DELETE FROM account_media WHERE organization_id = ${account.organization_id} AND instagram_account_id = ${account.id}`;
       await sql`DELETE FROM account_daily_metrics WHERE organization_id = ${account.organization_id} AND instagram_account_id = ${account.id}`;
@@ -545,6 +568,7 @@ export async function deleteDataBySignedRequest(signedRequest: string) {
           last_successful_api_call_at = NULL, last_error_at = NULL, last_error_code = NULL,
           last_error_message = NULL, publishing_limit_usage = NULL, publishing_limit_total = NULL,
           publishing_limit_checked_at = NULL, disconnected_at = now(), updated_at = now(),
+          active_started_at = NULL, active_ended_at = NULL, active_timing_estimated = true,
           biography = NULL, website = NULL, granted_scopes = NULL, insights_error_code = NULL,
           insights_synced_at = NULL
         WHERE organization_id = ${account.organization_id} AND id = ${account.id}

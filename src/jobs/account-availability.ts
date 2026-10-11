@@ -1,5 +1,6 @@
 import { getSqlClient } from "@/db/client";
 import type { InstagramErrorKind } from "@/lib/errors";
+import { accountActivitySnapshot } from "@/server/account-activity";
 
 type MarkAccountUnavailableInput = {
   organizationId: string;
@@ -23,6 +24,7 @@ export async function markAccountUnavailableIfCurrent(input: MarkAccountUnavaila
     const [updatedAccount] = await sql<{ id: string }[]>`
       UPDATE instagram_accounts SET
         status = ${input.nextStatus}, token_last_checked_at = now(), last_error_at = now(),
+        active_ended_at = coalesce(active_ended_at, CASE WHEN status IN ('CONNECTED', 'TOKEN_EXPIRING') THEN now() END),
         last_error_code = ${input.errorCode}, last_error_message = ${input.errorMessage}, updated_at = now()
       WHERE organization_id = ${input.organizationId} AND id = ${input.accountId}
         AND encrypted_access_token = ${input.expectedEncryptedToken}
@@ -30,6 +32,13 @@ export async function markAccountUnavailableIfCurrent(input: MarkAccountUnavaila
       RETURNING id
     `;
     if (!updatedAccount) return false;
+    if (["CONNECTED", "TOKEN_EXPIRING"].includes(input.expectedStatus)) {
+      await sql`
+        INSERT INTO audit_logs (organization_id, event_type, entity_type, entity_id, metadata_json)
+        VALUES (${input.organizationId}, 'ACCOUNT_UNAVAILABLE', 'instagram_account', ${input.accountId},
+          ${JSON.stringify({ code: input.errorCode, ...await accountActivitySnapshot(sql, input.organizationId, input.accountId) })}::jsonb)
+      `;
+    }
 
     const publishingErrorCode = `${input.errorCode}_DURING_PUBLISH`;
     const affected = await sql<{ campaign_id: string }[]>`

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getSqlClient } from "@/db/client";
 import { encryptToken } from "@/lib/crypto";
 import { resetEnvForTests } from "@/lib/env";
-import { deauthorizeBySignedRequest, deleteDataBySignedRequest } from "@/server/accounts";
+import { deauthorizeBySignedRequest, deleteDataBySignedRequest, disconnectAccount } from "@/server/accounts";
 import { createCampaign, createOrganization, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 const appSecret = "integration-meta-callback-secret";
@@ -158,6 +158,8 @@ describe("callbacks Meta concorrentes", () => {
     `;
     const request = signDeauthorization(appScopedId, Math.floor(Date.now() / 1000));
 
+    const actor = await createUser("activity-deletion@example.test");
+    await disconnectAccount(account.id, actor, TEST_ORGANIZATION_ID);
     await deleteDataBySignedRequest(request);
 
     const [[metricsCount], [mediaCount]] = await Promise.all([
@@ -173,5 +175,9 @@ describe("callbacks Meta concorrentes", () => {
       SELECT biography, website, granted_scopes, insights_synced_at FROM instagram_accounts WHERE id = ${account.id}
     `;
     expect(row).toEqual({ biography: null, website: null, granted_scopes: null, insights_synced_at: null });
+    const [activity] = await sql`SELECT active_started_at, active_ended_at FROM instagram_accounts WHERE id = ${account.id}`;
+    expect(activity).toEqual({ active_started_at: null, active_ended_at: null });
+    const [snapshots] = await sql`SELECT count(*)::int AS count FROM audit_logs WHERE entity_id = ${account.id} AND metadata_json ? 'activity'`;
+    expect(snapshots.count).toBe(0);
   });
 });

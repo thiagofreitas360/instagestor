@@ -65,6 +65,14 @@ O desenho completo está em [QUEUE.md](QUEUE.md).
 
 `encrypted_access_token` guarda envelope AES-256-GCM (`versão.iv.tag.ciphertext`), nunca plaintext. `authorized_at` muda somente em conexão/reconexão OAuth e permite ignorar callback antigo sem confundi-lo com refresh automático do token. `oauth_states.nonce_hash` não guarda o state original. `login_attempts.key_hash` não guarda e-mail/IP legíveis. App Secret, senha admin, chaves e credenciais de infraestrutura nunca pertencem ao banco. Parâmetros `jsonb` são sempre pré-serializados com `JSON.stringify` e o cliente envia a string como está (`src/db/client.ts`); linhas de `audit_logs` gravadas antes dessa correção podem ter `metadata_json` como string escalar. A migration `0011` restaura as linhas antigas.
 
+## Atividade das contas
+
+`instagram_accounts.active_started_at` e `active_ended_at` representam o período ativo atual ou o último encerrado. `active_timing_estimated` indica quando a referência foi recuperada de datas legadas, sem histórico completo. Novas conexões OAuth, contas fake e seed gravam períodos exatos; reautorizar uma conta ainda ativa e renovar tokens preserva seu início. Uma reconexão depois de indisponibilidade abre outro período. O aquecimento continua usando a primeira conexão (`created_at`), e `authorized_at` continua protegendo os callbacks OAuth.
+
+A migration `0026_account_activity` mantém as datas de início nulas nas contas existentes e define `now()` somente como default para novos inserts. Na leitura, a última autorização serve de referência estimada para os registros legados; períodos sem término conhecido ficam sem duração. Datas, encerramentos e a referência usada no cálculo vêm do relógio do PostgreSQL para evitar diferenças de relógio entre processos.
+
+Eventos `ACCOUNT_DISCONNECTED`, `ACCOUNT_BANNED`, `ACCOUNT_DEAUTHORIZED` e `ACCOUNT_UNAVAILABLE` guardam um snapshot `metadata_json.activity` com início, fim, dias completos de 24 horas e indicação de estimativa. A reconexão preserva esses snapshots, e a exclusão de dados limpa os novos campos e metadados. No histórico de banidas, dias de vida desde `created_at` e dias ativos do período são indicadores separados; a média de dias ativos considera somente registros exatos.
+
 ## Índices
 
 Os índices correspondem aos caminhos usados pela aplicação:
