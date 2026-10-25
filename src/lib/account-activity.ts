@@ -1,4 +1,17 @@
+import { DateTime } from "luxon";
 import { DAY_MS } from "./account-warmup";
+
+export const ACTIVITY_PERIODS = { hoje: "Hoje", ontem: "Ontem", "7d": "7 dias", "30d": "30 dias" } as const;
+export type ActivityPeriod = keyof typeof ACTIVITY_PERIODS;
+
+/** Intervalo [from, to) no fuso da organização; "7d" e "30d" incluem o dia de hoje, como em Análises. */
+export function activityPeriodRange(period: ActivityPeriod, timezone: string, now = new Date()) {
+  const today = DateTime.fromJSDate(now).setZone(timezone).startOf("day");
+  const days = period === "7d" ? 7 : period === "30d" ? 30 : 1;
+  const from = period === "ontem" ? today.minus({ days: 1 }) : today.minus({ days: days - 1 });
+  const to = period === "ontem" ? today : today.plus({ days: 1 });
+  return { from: from.toJSDate(), to: to.toJSDate() };
+}
 
 type Timestamp = Date | string | null;
 

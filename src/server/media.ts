@@ -2,32 +2,38 @@ import { sha256 } from "@/lib/crypto";
 import { getSqlClient } from "@/db/client";
 import { log } from "@/lib/logger";
 import { getStorageProvider, newStorageKey } from "@/providers/storage";
+import { attachMediaToFolderLoops, detachMediaFromLoops } from "./automation";
 import { validateMedia } from "./media-constraints";
 
-export async function storeMedia(file: File, organizationId: string, folderId?: string) {
+export type UploadedFile = { name: string; type: string; data: Buffer };
+
+export async function storeMedia(file: UploadedFile, organizationId: string, folderId?: string) {
   if (folderId) {
     const [folder] = await getSqlClient()<Array<{ id: string }>>`
       SELECT id FROM media_folders WHERE organization_id = ${organizationId} AND id = ${folderId}
     `;
     if (!folder) throw new Error("Pasta de mídia não encontrada");
   }
-  const data = Buffer.from(await file.arrayBuffer());
+  const data = file.data;
   const metadata = await validateMedia(file.name, file.type, data);
   const key = newStorageKey(organizationId);
   const storage = getStorageProvider();
   await storage.put(key, data, metadata.mimeType);
   try {
-    const [asset] = await getSqlClient()<{ id: string }[]>`
-      INSERT INTO media_assets (
-        organization_id, original_filename, storage_provider, storage_key, mime_type, media_kind, size_bytes,
-        checksum_sha256, width, height, duration_seconds, folder_id, processing_status
-      ) VALUES (
-        ${organizationId}, ${file.name}, ${storage.name}, ${key}, ${metadata.mimeType}, ${metadata.kind}, ${data.length},
-        ${sha256(data)}, ${metadata.width ?? null}, ${metadata.height ?? null}, ${metadata.durationSeconds ?? null},
-        ${folderId ?? null}, 'READY'
-      ) RETURNING id
-    `;
-    return asset.id;
+    return await getSqlClient().begin(async (sql) => {
+      const [asset] = await sql<{ id: string }[]>`
+        INSERT INTO media_assets (
+          organization_id, original_filename, storage_provider, storage_key, mime_type, media_kind, size_bytes,
+          checksum_sha256, width, height, duration_seconds, folder_id, processing_status
+        ) VALUES (
+          ${organizationId}, ${file.name}, ${storage.name}, ${key}, ${metadata.mimeType}, ${metadata.kind}, ${data.length},
+          ${sha256(data)}, ${metadata.width ?? null}, ${metadata.height ?? null}, ${metadata.durationSeconds ?? null},
+          ${folderId ?? null}, 'READY'
+        ) RETURNING id
+      `;
+      await attachMediaToFolderLoops(sql, organizationId, [asset.id]);
+      return asset.id;
+    });
   } catch (error) {
     try {
       await storage.delete(key);
@@ -125,19 +131,12 @@ export async function moveMedia(assetId: string | string[], folderId: string | n
     `;
     if (assets.length !== assetIds.length) throw new Error("Mídia não encontrada");
     const changedIds = assets.filter((asset) => asset.folder_id !== folderId).map((asset) => asset.id);
-    if (changedIds.length) {
-      const [loop] = await sql<Array<{ name: string }>>`
-        SELECT loop.name FROM loop_media selected
-        JOIN loops loop ON loop.organization_id = selected.organization_id AND loop.id = selected.loop_id
-        WHERE selected.organization_id = ${organizationId} AND selected.media_asset_id IN ${sql(changedIds)}
-        ORDER BY loop.created_at LIMIT 1
-      `;
-      if (loop) throw new Error(`A mídia é usada pelo loop "${loop.name}" e não pode ser movida`);
-    }
+    await detachMediaFromLoops(sql, organizationId, changedIds);
     const moved = await sql`
       UPDATE media_assets SET folder_id = ${folderId}, updated_at = now()
       WHERE organization_id = ${organizationId} AND id IN ${sql(assetIds)} AND deleted_at IS NULL RETURNING id
     `;
+    await attachMediaToFolderLoops(sql, organizationId, changedIds);
     await sql`
       INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id, metadata_json)
       SELECT organization_id, ${actorUserId}, 'MEDIA_MOVED', 'media_asset', id,
@@ -160,15 +159,14 @@ export async function deleteMedia(assetId: string | string[], actorUserId: strin
       FOR UPDATE
     `;
     if (assets.length !== assetIds.length) throw new Error("Mídia não encontrada");
-    const [usage] = await sql<Array<{ campaign_count: number; loop_count: number; schedule_count: number }>>`
+    const [usage] = await sql<Array<{ campaign_count: number; schedule_count: number }>>`
       SELECT
         (SELECT count(*)::int FROM campaign_media WHERE organization_id = ${organizationId} AND media_asset_id IN ${sql(assetIds)}) AS campaign_count,
-        (SELECT count(*)::int FROM loop_media WHERE organization_id = ${organizationId} AND media_asset_id IN ${sql(assetIds)}) AS loop_count,
         (SELECT count(*)::int FROM schedule_media WHERE organization_id = ${organizationId} AND media_asset_id IN ${sql(assetIds)}) AS schedule_count
     `;
-    if (usage.loop_count > 0) throw new Error("Mídia usada por loop não pode ser excluída");
     if (usage.schedule_count > 0) throw new Error("Mídia usada por escala não pode ser excluída");
     if (usage.campaign_count > 0) throw new Error("Mídia usada por campanha não pode ser excluída");
+    await detachMediaFromLoops(sql, organizationId, assetIds);
 
     await sql`
       UPDATE media_assets SET processing_status = 'DELETED', deleted_at = now(), updated_at = now()

@@ -9,7 +9,7 @@ import { getSqlClient } from "@/db/client";
 import { resetEnvForTests } from "@/lib/env";
 import { getStorageProvider, newStorageKey } from "@/providers/storage";
 import { createMediaFolder, deleteMedia, deleteMediaFolder, moveMedia, renameMediaFolder } from "@/server/media";
-import { createCampaign, createOrganization, createUser, TEST_ORGANIZATION_ID } from "./helpers";
+import { createAccounts, createCampaign, createJobs, createOrganization, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 let storageRoot: string;
 
@@ -181,7 +181,7 @@ describe("ações em mídias", () => {
     expect(existsSync(path.join(storageRoot, assets[2].storage_key))).toBe(true);
   });
 
-  it.each(["campanha", "loop", "escala"])("não exclui nenhuma mídia do lote quando uma é usada por %s", async (usage) => {
+  it.each(["campanha", "escala"])("não exclui nenhuma mídia do lote quando uma é usada por %s", async (usage) => {
     const actor = await createUser();
     const [free, used] = await seedAssets(2);
     const campaignId = await createCampaign(actor);
@@ -189,11 +189,6 @@ describe("ações em mídias", () => {
     if (usage === "campanha") {
       await sql`INSERT INTO campaign_media (organization_id, campaign_id, media_asset_id, position)
         VALUES (${TEST_ORGANIZATION_ID}, ${campaignId}, ${used.id}, 0)`;
-    } else if (usage === "loop") {
-      const [loop] = await sql`INSERT INTO loops (organization_id, campaign_id, name, created_by)
-        VALUES (${TEST_ORGANIZATION_ID}, ${campaignId}, 'Loop protegido', ${actor}) RETURNING id`;
-      await sql`INSERT INTO loop_media (organization_id, loop_id, media_asset_id, position)
-        VALUES (${TEST_ORGANIZATION_ID}, ${loop.id}, ${used.id}, 0)`;
     } else {
       const [schedule] = await sql`INSERT INTO schedules (
           organization_id, campaign_id, name, created_by, start_date, end_date, times, days_of_week, media_type
@@ -211,21 +206,37 @@ describe("ações em mídias", () => {
     expect(await sql`SELECT id FROM audit_logs WHERE event_type = 'MEDIA_DELETED'`).toHaveLength(0);
   });
 
-  it("bloqueia todo o movimento se uma mídia está em loop, mas permite manter a pasta atual", async () => {
+  it("retira a mídia do loop ao sair da pasta ou ser excluída e a inclui ao entrar na pasta", async () => {
     const actor = await createUser();
-    const folder = await createMediaFolder("Destino", actor, TEST_ORGANIZATION_ID);
-    const [free, used] = await seedAssets(2);
+    const folder = await createMediaFolder("Pool", actor, TEST_ORGANIZATION_ID);
+    const other = await createMediaFolder("Outra", actor, TEST_ORGANIZATION_ID);
+    const [first, second] = await seedAssets(2);
     const campaignId = await createCampaign(actor);
     const sql = getSqlClient();
-    const [loop] = await sql`INSERT INTO loops (organization_id, campaign_id, name, created_by)
-      VALUES (${TEST_ORGANIZATION_ID}, ${campaignId}, 'Loop protegido', ${actor}) RETURNING id`;
+    await sql`UPDATE media_assets SET folder_id = ${folder}`;
+    const [loop] = await sql`INSERT INTO loops (organization_id, campaign_id, media_folder_id, name, created_by)
+      VALUES (${TEST_ORGANIZATION_ID}, ${campaignId}, ${folder}, 'Loop da pasta', ${actor}) RETURNING id`;
     await sql`INSERT INTO loop_media (organization_id, loop_id, media_asset_id, position)
-      VALUES (${TEST_ORGANIZATION_ID}, ${loop.id}, ${used.id}, 0)`;
+      VALUES (${TEST_ORGANIZATION_ID}, ${loop.id}, ${first.id}, 0), (${TEST_ORGANIZATION_ID}, ${loop.id}, ${second.id}, 1)`;
+    const [account] = await createAccounts(1, "pool");
+    const [job] = await createJobs(campaignId, [account]);
+    await sql`UPDATE publication_jobs SET loop_id = ${loop.id}, direct_media_asset_id = ${first.id} WHERE id = ${job.id}`;
+    for (const asset of [first, second]) await getStorageProvider("LOCAL").put(asset.storage_key, Buffer.from("video"), "video/mp4");
+    const poolIds = async () => (await sql<Array<{ media_asset_id: string }>>`
+      SELECT media_asset_id FROM loop_media WHERE loop_id = ${loop.id} ORDER BY position
+    `).map((row) => row.media_asset_id);
 
-    await expect(moveMedia([free.id, used.id], folder, actor, TEST_ORGANIZATION_ID)).rejects.toThrow('A mídia é usada pelo loop "Loop protegido" e não pode ser movida');
-    expect((await sql`SELECT folder_id FROM media_assets`).every((asset) => asset.folder_id === null)).toBe(true);
-    expect(await sql`SELECT id FROM audit_logs WHERE event_type = 'MEDIA_MOVED'`).toHaveLength(0);
-    await expect(moveMedia([free.id, used.id], null, actor, TEST_ORGANIZATION_ID)).resolves.toBe(2);
+    await expect(moveMedia(first.id, other, actor, TEST_ORGANIZATION_ID)).resolves.toBe(1);
+    expect(await poolIds()).toEqual([second.id]);
+    const [cancelled] = await sql<Array<{ status: string }>>`SELECT status FROM publication_jobs WHERE id = ${job.id}`;
+    expect(cancelled.status).toBe("CANCELLED");
+
+    await expect(moveMedia(first.id, folder, actor, TEST_ORGANIZATION_ID)).resolves.toBe(1);
+    expect(await poolIds()).toEqual([second.id, first.id]);
+
+    await expect(deleteMedia(second.id, actor, TEST_ORGANIZATION_ID)).resolves.toBe(1);
+    expect(await poolIds()).toEqual([first.id]);
+    expect(existsSync(path.join(storageRoot, second.storage_key))).toBe(false);
   });
 
   it("rejeita uma seleção vazia", async () => {

@@ -174,7 +174,7 @@ export const instagramAccounts = pgTable(
     profilePictureUrl: text("profile_picture_url"),
     accountType: text("account_type"),
     isNewAccount: boolean("is_new_account").notNull().default(false),
-    warmupProfile: text("warmup_profile").$type<"FAST" | "BALANCED" | "CONSERVATIVE">().default("BALANCED"),
+    warmupProfile: text("warmup_profile").$type<"FAST" | "BALANCED" | "CONSERVATIVE">(),
     status: instagramAccountStatus("status").notNull().default("CONNECTED"),
     encryptedAccessToken: text("encrypted_access_token"),
     authorizedAt: timestamp("authorized_at", { withTimezone: true }).defaultNow().notNull(),

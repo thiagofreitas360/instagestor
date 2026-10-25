@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { formatBytes, initials } from "@/components/ui";
 import { AccountWarmupBadge } from "@/components/account-warmup-badge";
 import type { WarmupProfile } from "@/lib/account-warmup";
+import { uploadMedia } from "@/lib/upload-client";
 
 type LoopAccount = { id: string; username: string; display_name: string | null; profile_picture_url: string | null; is_new_account: boolean; warmup_profile: WarmupProfile | null };
 type MediaType = "REELS" | "IMAGE" | "MIXED";
@@ -165,15 +166,12 @@ export function LoopMediaPool({
         failures.push(`${file.name}: tipo incompatível com o loop`);
         continue;
       }
-      const data = new FormData();
-      data.set("file", file);
-      data.set("folderId", folderId);
       try {
-        const response = await fetch("/api/media/upload", { method: "POST", body: data, headers: { accept: "application/json" } });
-        const body = await response.json().catch(() => ({})) as { id?: string; error?: string };
-        if (!response.ok || !body.id) throw new Error(body.error ?? "envio não concluído");
+        const id = await uploadMedia(file, folderId, (progress) => {
+          setStatus(`Enviando ${index + 1} de ${files.length}… ${Math.round(progress * 100)}%`);
+        });
         const asset: LoopAsset = {
-          id: body.id,
+          id,
           original_filename: file.name,
           media_kind: kind,
           folder_id: folderId,

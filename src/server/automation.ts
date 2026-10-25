@@ -197,6 +197,72 @@ async function loadLoopAssets(
   return assets;
 }
 
+/**
+ * A pasta é o pool dos loops que a usam: mídia que entra na pasta entra nos loops compatíveis,
+ * mídia que sai ou é excluída sai deles. Remoções manuais feitas no editor continuam valendo.
+ */
+export async function attachMediaToFolderLoops(sql: TransactionSql, organizationId: string, assetIds: string[]) {
+  const ids = unique(assetIds);
+  if (!ids.length) return 0;
+  // Serializa com o agendamento e com outros uploads do mesmo loop (posição é única por loop).
+  await sql`
+    SELECT loop.id FROM loops loop
+    WHERE loop.organization_id = ${organizationId} AND loop.media_folder_id IN (
+      SELECT folder_id FROM media_assets
+      WHERE organization_id = ${organizationId} AND id = ANY(${ids}::uuid[]) AND folder_id IS NOT NULL
+    )
+    ORDER BY loop.id FOR UPDATE
+  `;
+  const added = await sql<Array<{ loop_id: string }>>`
+    INSERT INTO loop_media (organization_id, loop_id, media_asset_id, position)
+    SELECT asset.organization_id, loop.id, asset.id,
+      coalesce((SELECT max(existing.position) FROM loop_media existing WHERE existing.loop_id = loop.id), -1)
+        + row_number() OVER (PARTITION BY loop.id ORDER BY asset.created_at, asset.id)
+    FROM media_assets asset
+    JOIN loops loop ON loop.organization_id = asset.organization_id AND loop.media_folder_id = asset.folder_id
+    WHERE asset.organization_id = ${organizationId} AND asset.id = ANY(${ids}::uuid[])
+      AND asset.processing_status = 'READY' AND asset.deleted_at IS NULL
+      AND (loop.media_type = 'MIXED'
+        OR (loop.media_type = 'REELS' AND asset.media_kind = 'VIDEO')
+        OR (loop.media_type = 'IMAGE' AND asset.media_kind = 'IMAGE'))
+    ON CONFLICT (loop_id, media_asset_id) DO NOTHING
+    RETURNING loop_id
+  `;
+  if (!added.length) return 0;
+  // Contas que esgotaram um pool limitado voltam a rodar; o worker reagenda em até 30 s.
+  await sql`
+    UPDATE loop_account_state SET finished = false, updated_at = now()
+    WHERE organization_id = ${organizationId}
+      AND loop_id = ANY(${unique(added.map((row) => row.loop_id))}::uuid[]) AND finished
+  `;
+  return added.length;
+}
+
+export async function detachMediaFromLoops(sql: TransactionSql, organizationId: string, assetIds: string[]) {
+  const ids = unique(assetIds);
+  if (!ids.length) return 0;
+  const removed = await sql<Array<{ id: string; loop_id: string }>>`
+    DELETE FROM loop_media WHERE organization_id = ${organizationId} AND media_asset_id = ANY(${ids}::uuid[])
+    RETURNING id, loop_id
+  `;
+  if (!removed.length) return 0;
+  const loopIds = unique(removed.map((row) => row.loop_id));
+  // ponytail: jobs já em execução com essa mídia seguem até o fim (e falham se o arquivo sumir); só o que não começou é cancelado.
+  await sql`
+    UPDATE publication_jobs SET status = 'CANCELLED', finished_at = now(), updated_at = now()
+    WHERE organization_id = ${organizationId} AND loop_id = ANY(${loopIds}::uuid[])
+      AND direct_media_asset_id = ANY(${ids}::uuid[]) AND status IN ('DRAFT', 'QUEUED', 'RETRY_WAIT')
+  `;
+  await sql`
+    UPDATE loop_account_state SET used_media_ids = ARRAY(
+        SELECT used_id FROM unnest(used_media_ids) used_id
+        WHERE used_id <> ALL(${removed.map((row) => row.id)}::uuid[])
+      ), updated_at = now()
+    WHERE organization_id = ${organizationId} AND loop_id = ANY(${loopIds}::uuid[])
+  `;
+  return removed.length;
+}
+
 function publicationTypeFor(asset: Pick<Asset, "media_kind">) {
   return asset.media_kind === "VIDEO" ? "REEL" : "FEED_IMAGE";
 }

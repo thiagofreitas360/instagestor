@@ -1,0 +1,1 @@
+ALTER TABLE "instagram_accounts" ALTER COLUMN "warmup_profile" DROP DEFAULT;

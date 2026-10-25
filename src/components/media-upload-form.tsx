@@ -3,10 +3,11 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatBytes } from "@/components/ui";
+import { uploadMedia } from "@/lib/upload-client";
 
 const acceptedTypes = new Set(["image/jpeg", "video/mp4", "video/quicktime"]);
 type UploadStatus = "WAITING" | "UPLOADING" | "DONE" | "ERROR";
-type UploadItem = { id: string; file: File; status: UploadStatus; error?: string };
+type UploadItem = { id: string; file: File; status: UploadStatus; error?: string; progress?: number };
 type Folder = { id: string; name: string };
 
 export function MediaUploadForm({ maxBytes, folders }: { maxBytes: number; folders: Folder[] }) {
@@ -44,48 +45,39 @@ export function MediaUploadForm({ maxBytes, folders }: { maxBytes: number; folde
     setItems((current) => current.map((item) => item.id === id ? { ...item, ...values } : item));
   }
 
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const pending = items.filter((item) => item.status !== "DONE" && !validate(item.file));
-    if (!pending.length) return;
+  const sendable = (item: UploadItem) => item.status !== "DONE" && item.status !== "UPLOADING" && !validate(item.file);
+
+  // ponytail: um arquivo por vez — em paralelo a banda se divide e o servidor segura o dobro de memória, sem ganho.
+  async function run(batch: UploadItem[]) {
+    if (uploading || !batch.length) return;
     setUploading(true);
     setSummary(null);
-    let cursor = 0;
     let succeeded = 0;
-
-    async function worker() {
-      while (cursor < pending.length) {
-        const item = pending[cursor++];
-        update(item.id, { status: "UPLOADING", error: undefined });
-        const data = new FormData();
-        data.set("file", item.file);
-        if (folderId) data.set("folderId", folderId);
-        try {
-          const response = await fetch("/api/media/upload", {
-            method: "POST",
-            body: data,
-            headers: { accept: "application/json" },
-          });
-          const result = await response.json() as { error?: string };
-          if (!response.ok) throw new Error(result.error ?? "Upload não concluído");
-          succeeded++;
-          update(item.id, { status: "DONE", error: undefined });
-        } catch (error) {
-          update(item.id, { status: "ERROR", error: error instanceof Error ? error.message : "Upload não concluído" });
-        }
+    for (const item of batch) {
+      update(item.id, { status: "UPLOADING", error: undefined, progress: 0 });
+      try {
+        await uploadMedia(item.file, folderId, (progress) => update(item.id, { progress }));
+        succeeded++;
+        update(item.id, { status: "DONE", error: undefined });
+      } catch (error) {
+        update(item.id, { status: "ERROR", error: error instanceof Error ? error.message : "Upload não concluído" });
       }
     }
-
-    await Promise.all([worker(), worker()]);
     setUploading(false);
-    setSummary(`${succeeded} de ${pending.length} arquivo(s) enviado(s).`);
+    const failed = batch.length - succeeded;
+    setSummary(`${succeeded} de ${batch.length} arquivo(s) enviado(s).${failed ? " Use “Tentar novamente” nos que falharam." : ""}`);
     if (succeeded) router.refresh();
   }
+
+  const pending = items.filter(sendable);
 
   return (
     <form
       className={`upload-form upload-dropzone ${dragging ? "is-dragging" : ""}`}
-      onSubmit={submit}
+      onSubmit={(event) => {
+        event.preventDefault();
+        void run(pending);
+      }}
       onDragEnter={(event) => {
         event.preventDefault();
         setDragging(true);
@@ -132,16 +124,23 @@ export function MediaUploadForm({ maxBytes, folders }: { maxBytes: number; folde
             <li key={item.id}>
               <span><strong>{item.file.name}</strong><small>{formatBytes(item.file.size)}</small></span>
               <span className={item.status === "ERROR" ? "inline-error" : "muted"}>
-                {item.status === "WAITING" ? "Aguardando" : item.status === "UPLOADING" ? "Enviando…" : item.status === "DONE" ? "Concluído" : item.error}
+                {item.status === "WAITING" ? "Aguardando"
+                  : item.status === "UPLOADING" ? `Enviando… ${Math.round((item.progress ?? 0) * 100)}%`
+                    : item.status === "DONE" ? "Concluído" : item.error}
               </span>
               {!uploading && item.status !== "DONE" ? (
-                <button className="button button-small button-ghost" type="button" onClick={() => setItems((current) => current.filter(({ id }) => id !== item.id))}>Remover</button>
+                <span className="upload-item-actions">
+                  {item.status === "ERROR" && sendable(item) ? (
+                    <button className="button button-small button-secondary" type="button" onClick={() => void run([item])}>Tentar novamente</button>
+                  ) : null}
+                  <button className="button button-small button-ghost" type="button" onClick={() => setItems((current) => current.filter(({ id }) => id !== item.id))}>Remover</button>
+                </span>
               ) : null}
             </li>
           ))}
         </ul>
       ) : null}
-      <button className="button button-secondary" type="submit" disabled={uploading || !items.some((item) => item.status !== "DONE" && !validate(item.file))}>
+      <button className="button button-secondary" type="submit" disabled={uploading || !pending.length}>
         {uploading ? "Enviando…" : "Enviar mídias"}
       </button>
     </form>

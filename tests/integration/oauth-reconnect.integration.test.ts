@@ -31,13 +31,13 @@ afterEach(() => {
 });
 
 describe("OAuth com reconexão direcionada", () => {
-  it("starts new accounts in Balanced and keeps the first connection and selected profile on reconnection", async () => {
+  it("starts new accounts without warmup and keeps the first connection and selected profile on reconnection", async () => {
     const userId = await createUser();
     const sql = getSqlClient();
     metaReturns("warmup-connect");
     const id = await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId));
     const [first] = await sql`SELECT warmup_profile, created_at FROM instagram_accounts WHERE id = ${id}`;
-    expect(first.warmup_profile).toBe("BALANCED");
+    expect(first.warmup_profile).toBeNull();
     await sql`UPDATE instagram_accounts SET warmup_profile = 'CONSERVATIVE' WHERE id = ${id}`;
     await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId, id));
     const [again] = await sql`SELECT warmup_profile, created_at FROM instagram_accounts WHERE id = ${id}`;

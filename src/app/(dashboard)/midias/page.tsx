@@ -10,6 +10,7 @@ import { getSqlClient } from "@/db/client";
 import { EmptyState, formatBytes, formatDate, MessageBanner, PageHeader, Panel, StatusBadge } from "@/components/ui";
 import { MediaUploadForm } from "@/components/media-upload-form";
 import { MediaBulkSelection } from "@/components/media-bulk-selection";
+import { MediaPreview } from "@/components/media-preview";
 import { getEnv } from "@/lib/env";
 import { getPrivateMediaUrl } from "@/providers/storage";
 import { requireAdmin } from "@/server/auth";
@@ -144,12 +145,7 @@ export default async function MediaPage({ searchParams }: PageProps) {
             <article className="media-card" key={asset.id}>
               <div className={`media-thumb media-thumb-${asset.media_kind.toLowerCase()}`}>
                 {asset.previewUrl ? (
-                  asset.media_kind === "VIDEO" ? (
-                    <video className="media-real-preview" src={asset.previewUrl} controls playsInline preload="metadata" aria-label={`Prévia de ${asset.original_filename}`} />
-                  ) : (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img className="media-real-preview" src={asset.previewUrl} alt={`Prévia de ${asset.original_filename}`} loading="lazy" />
-                  )
+                  <MediaPreview src={asset.previewUrl} kind={asset.media_kind === "VIDEO" ? "VIDEO" : "IMAGE"} name={asset.original_filename} />
                 ) : (
                   <><span className="media-kind-mark" aria-hidden="true">{asset.media_kind === "VIDEO" ? "▶" : "▧"}</span><span>{asset.media_kind === "VIDEO" ? "Vídeo" : "Imagem"}</span></>
                 )}

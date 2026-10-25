@@ -7,7 +7,7 @@ import { InstagramConnectButton } from "@/components/instagram-connect-button";
 import { AccountBulkSelection } from "@/components/account-bulk-selection";
 import { AccountWarmupBadge } from "@/components/account-warmup-badge";
 import { AccountActivity } from "@/components/account-activity";
-import type { AccountActivityDates } from "@/lib/account-activity";
+import { accountActivity, ACTIVITY_PERIODS, activityPeriodRange, type AccountActivityDates, type ActivityPeriod } from "@/lib/account-activity";
 import { accountWarmup, WARMUP_PROFILES, type WarmupProfile } from "@/lib/account-warmup";
 import { requireAdmin } from "@/server/auth";
 import { listMetaApps } from "@/server/meta-apps";
@@ -37,7 +37,7 @@ type AccountRow = AccountActivityDates & {
 type GroupRow = { id: string; name: string };
 
 type PageProps = {
-  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[]; perfil?: string | string[]; vinculo?: string | string[] }>;
+  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[]; perfil?: string | string[]; vinculo?: string | string[]; periodo?: string | string[] }>;
 };
 
 function first(value?: string | string[]) {
@@ -48,7 +48,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const user = await requireAdmin();
   const params = await searchParams;
   const sql = getSqlClient();
-  const [accounts, groups, apps] = await Promise.all([
+  const [accounts, groups, apps, [setting]] = await Promise.all([
     sql<AccountRow[]>`
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.account_type, account.status,
         account.token_expires_at, account.is_new_account, account.warmup_profile, account.created_at,
@@ -82,12 +82,27 @@ export default async function AccountsPage({ searchParams }: PageProps) {
     `,
     sql<GroupRow[]>`SELECT id, name FROM account_groups WHERE organization_id = ${user.organizationId} ORDER BY name`,
     listMetaApps(user.organizationId),
+    sql<Array<{ default_timezone: string }>>`
+      SELECT coalesce((SELECT default_timezone FROM settings WHERE organization_id = ${user.organizationId}), 'America/Sao_Paulo') AS default_timezone
+    `,
   ]);
   const fakeMode = process.env.INSTAGRAM_PROVIDER === "fake"
     && (process.env.NODE_ENV !== "production" || process.env.ALLOW_FAKE_PROVIDER_IN_PRODUCTION === "true");
   const connected = accounts.filter((account) => ["CONNECTED", "TOKEN_EXPIRING"].includes(account.status)).length;
   const needsAttention = accounts.filter((account) => ["REAUTH_REQUIRED", "ERROR"].includes(account.status)).length;
   const selectedFilter = first(params.filtro) ?? "todas";
+  const periodFilterable = selectedFilter === "conectadas" || selectedFilter === "reconectar";
+  const requestedPeriod = first(params.periodo);
+  const selectedPeriod = periodFilterable && requestedPeriod && Object.hasOwn(ACTIVITY_PERIODS, requestedPeriod)
+    ? requestedPeriod as ActivityPeriod : undefined;
+  const periodRange = selectedPeriod ? activityPeriodRange(selectedPeriod, setting.default_timezone) : undefined;
+  // Conectadas filtram pela data de conexão; Reconectar, pela data em que a conta parou de funcionar.
+  const inPeriod = (account: AccountRow) => {
+    if (!periodRange) return true;
+    const activity = accountActivity(account);
+    const date = selectedFilter === "conectadas" ? activity.startedAt : activity.endedAt;
+    return Boolean(date && date >= periodRange.from && date < periodRange.to);
+  };
   const unlinked = first(params.vinculo) === "nao_vinculadas";
   const requestedNiche = first(params.nicho);
   const selectedNiche = groups.some((group) => group.id === requestedNiche) ? requestedNiche : undefined;
@@ -105,22 +120,26 @@ export default async function AccountsPage({ searchParams }: PageProps) {
     if (selectedNiche && !account.group_ids.includes(selectedNiche)) return false;
     if (normalizedSearch && !account.username.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
       && !account.display_name?.toLocaleLowerCase("pt-BR").includes(normalizedSearch)) return false;
-    if (selectedFilter === "conectadas") return account.status === "CONNECTED";
+    if (selectedFilter === "conectadas") return account.status === "CONNECTED" && inPeriod(account);
     if (selectedFilter === "problema") return ["ERROR", "DISABLED"].includes(account.status);
     if (selectedFilter === "expirando") return account.status === "TOKEN_EXPIRING";
-    if (selectedFilter === "reconectar") return account.status === "REAUTH_REQUIRED";
+    if (selectedFilter === "reconectar") return account.status === "REAUTH_REQUIRED" && inPeriod(account);
     if (selectedFilter === "banidas") return account.status === "BANNED";
     return true;
   });
   const newCount = matchingAccounts.filter(isNew).length;
   const filteredAccounts = matchingAccounts.filter((account) => selectedType === "todas"
     || isNew(account) === (selectedType === "novas"));
-  const returnParams = new URLSearchParams({
+  const baseParams = {
     ...(unlinked ? { vinculo: "nao_vinculadas" } : {}),
-    ...(selectedFilter !== "todas" ? { filtro: selectedFilter } : {}),
     ...(selectedType !== "todas" ? { tipo: selectedType } : {}),
     ...(selectedProfile ? { perfil: selectedProfile } : {}),
     ...(selectedNiche ? { nicho: selectedNiche } : {}), ...(search ? { busca: search } : {}),
+  };
+  const returnParams = new URLSearchParams({
+    ...baseParams,
+    ...(selectedFilter !== "todas" ? { filtro: selectedFilter } : {}),
+    ...(selectedPeriod ? { periodo: selectedPeriod } : {}),
   });
   const returnTo = `/contas${returnParams.size ? `?${returnParams}` : ""}`;
 
@@ -138,6 +157,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
 
       <form className="analytics-filters" method="get" action="/contas">
         {selectedFilter !== "todas" ? <input type="hidden" name="filtro" value={selectedFilter} /> : null}
+        {selectedPeriod ? <input type="hidden" name="periodo" value={selectedPeriod} /> : null}
         <label>
           Buscar conta
           <input name="busca" type="search" defaultValue={search} placeholder="@usuario ou nome" />
@@ -186,12 +206,9 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           <Link
             className={`button button-small ${selectedFilter === value ? "button-primary" : "button-secondary"}`}
             href={`/contas?${new URLSearchParams({
-              ...(unlinked ? { vinculo: "nao_vinculadas" } : {}),
+              ...baseParams,
               ...(value === "todas" ? {} : { filtro: value }),
-              ...(selectedNiche ? { nicho: selectedNiche } : {}),
-              ...(search ? { busca: search } : {}),
-              ...(selectedType !== "todas" ? { tipo: selectedType } : {}),
-              ...(selectedProfile ? { perfil: selectedProfile } : {}),
+              ...(selectedPeriod && ["conectadas", "reconectar"].includes(value) ? { periodo: selectedPeriod } : {}),
             }).toString()}`.replace(/\?$/, "")}
             key={value}
           >
@@ -199,6 +216,20 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           </Link>
         ))}
       </nav>
+      {periodFilterable ? (
+        <nav className="page-actions" aria-label={selectedFilter === "conectadas" ? "Filtrar por data de conexão" : "Filtrar por data de desconexão"}>
+          <span className="muted">{selectedFilter === "conectadas" ? "Conectadas em:" : "Desconectadas em:"}</span>
+          {[["", "Qualquer data"], ...Object.entries(ACTIVITY_PERIODS)].map(([value, label]) => (
+            <Link
+              className={`button button-small ${(selectedPeriod ?? "") === value ? "button-primary" : "button-secondary"}`}
+              href={`/contas?${new URLSearchParams({ ...baseParams, filtro: selectedFilter, ...(value ? { periodo: value } : {}) })}`}
+              key={value}
+            >
+              {label}
+            </Link>
+          ))}
+        </nav>
+      ) : null}
 
       {fakeMode ? (
         <Panel className="dev-panel" title="Ambiente de desenvolvimento" description="Crie contas simuladas para testar o fluxo completo sem chamar a Meta.">

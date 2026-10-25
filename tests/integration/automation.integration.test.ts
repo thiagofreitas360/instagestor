@@ -7,7 +7,7 @@ import {
   createLoop, createSchedule, deleteLoop, scheduleNextLoopJob, setLoopStatus, updateLoop, updateSchedule, type LoopInput,
 } from "@/server/automation";
 import { disconnectAccount } from "@/server/accounts";
-import { deleteMediaFolder } from "@/server/media";
+import { deleteMediaFolder, moveMedia } from "@/server/media";
 import { createAccounts, createOrganization, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 async function createMedia(kind: "IMAGE" | "VIDEO", count: number, organizationId = TEST_ORGANIZATION_ID) {
@@ -216,6 +216,30 @@ describe("loops", () => {
       SELECT finished FROM loop_account_state WHERE loop_id = ${created.loopId} AND instagram_account_id = ${account.id}
     `;
     expect(state.finished).toBe(true);
+  });
+
+  it("adds media entering the loop folder to the pool and resumes finished accounts", async () => {
+    const sql = getSqlClient();
+    const actorUserId = await createUser("folder-sync@example.test");
+    const [account] = await createAccounts(1, "folder_sync");
+    const media = await createMedia("VIDEO", 1);
+    const created = await createLoop({ ...loopInput({ actorUserId, name: "Loop sincronizado", accountIds: [account.id], media }), noRepeat: true });
+    const [job] = await sql<Array<{ id: string }>>`SELECT id FROM publication_jobs WHERE loop_id = ${created.loopId}`;
+    await sql`UPDATE publication_jobs SET status = 'PUBLISHED', published_at = now() WHERE id = ${job.id}`;
+    await expect(scheduleNextLoopJob({ organizationId: TEST_ORGANIZATION_ID, loopId: created.loopId, accountId: account.id, runAt: new Date() })).resolves.toBeNull();
+
+    const [incoming] = await createMedia("VIDEO", 1);
+    const [image] = await createMedia("IMAGE", 1);
+    await moveMedia([incoming.id, image.id], media[0].folder_id, actorUserId, TEST_ORGANIZATION_ID);
+    const pool = await sql<Array<{ media_asset_id: string }>>`SELECT media_asset_id FROM loop_media WHERE loop_id = ${created.loopId} ORDER BY position`;
+    // A imagem entra na pasta mas não num loop de Reels.
+    expect(pool.map((row) => row.media_asset_id)).toEqual([media[0].id, incoming.id]);
+    const [state] = await sql<Array<{ finished: boolean }>>`SELECT finished FROM loop_account_state WHERE loop_id = ${created.loopId}`;
+    expect(state.finished).toBe(false);
+    const next = await scheduleNextLoopJob({ organizationId: TEST_ORGANIZATION_ID, loopId: created.loopId, accountId: account.id, runAt: new Date() });
+    expect(next).not.toBeNull();
+    const [scheduled] = await sql<Array<{ direct_media_asset_id: string }>>`SELECT direct_media_asset_id FROM publication_jobs WHERE id = ${next}`;
+    expect(scheduled.direct_media_asset_id).toBe(incoming.id);
   });
 
   it("gives each account entering the loop together a different video", async () => {

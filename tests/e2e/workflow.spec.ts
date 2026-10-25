@@ -83,7 +83,7 @@ test("fluxo fake completo: contas, grupo, mídia, campanha, prévia, fila e canc
     await page.locator('input[type="file"]').setInputFiles([jpegPath, secondJpegPath]);
     await expect(page.getByRole("button", { name: /Enviar m.*dias/i })).toBeEnabled();
     await page.getByRole("button", { name: /Enviar m.*dias/i }).click();
-    await expect(page.getByRole("status")).toHaveText("2 de 2 arquivo(s) enviado(s).");
+    await expect(page.locator(".upload-file-name")).toHaveText("2 de 2 arquivo(s) enviado(s).");
     await expect(page.getByRole("heading", { name: filename })).toBeVisible();
     await expect(page.getByRole("heading", { name: secondFilename })).toBeVisible();
     const firstMediaCard = page.locator("article.media-card").filter({ has: page.getByRole("heading", { name: filename }) });

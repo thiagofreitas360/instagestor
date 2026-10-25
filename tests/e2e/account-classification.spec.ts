@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { login, withE2EDatabase } from "./helpers";
 
-test("mostra Balanceado por padrão, muda perfis de 50 contas, combina filtros e desliga o aquecimento", async ({ page }, testInfo) => {
+test("não aplica aquecimento por padrão, muda perfis de 50 contas, combina filtros e desliga o aquecimento", async ({ page }, testInfo) => {
   const prefix = `classificacao_${randomUUID().slice(0, 8)}`;
   const { groupId, firstId } = await withE2EDatabase(async (sql) => {
     const [organization] = await sql<Array<{ id: string }>>`SELECT id FROM organizations WHERE slug = 'instagestor'`;
@@ -20,7 +20,7 @@ test("mostra Balanceado por padrão, muda perfis de 50 contas, combina filtros e
   await login(page);
   await page.goto(`/contas?busca=${prefix}`);
   await expect(page.locator("tbody tr")).toHaveCount(50);
-  await expect(page.locator(".account-warmup-badge").filter({ hasText: "Balanceado" })).toHaveCount(50);
+  await expect(page.locator(".account-warmup-badge")).toHaveCount(0);
   await page.getByRole("checkbox", { name: "Selecionar todas as 50 contas deste filtro", exact: true }).check();
   await expect(page.getByText("50 contas selecionadas", { exact: true })).toBeVisible();
   await page.getByRole("combobox", { name: "Perfil de aquecimento", exact: true }).selectOption("FAST");

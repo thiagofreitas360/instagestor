@@ -208,11 +208,11 @@ describe("account classification", () => {
 });
 
 describe("automatic warmup", () => {
-  it("gives new connections the Balanced profile and preserves dates when changing or disabling 50 accounts", async () => {
+  it("starts new connections without warmup and preserves dates when changing or disabling 50 accounts", async () => {
     const actor = await createUser();
     const ids = await createFakeAccounts(50, actor, org);
     const before = await getSqlClient()`SELECT id, created_at, warmup_profile FROM instagram_accounts ORDER BY id`;
-    expect(before.every((account) => account.warmup_profile === "BALANCED")).toBe(true);
+    expect(before.every((account) => account.warmup_profile === null)).toBe(true);
     expect(await setAccountsNewStatus(ids, false, actor, org, "FAST")).toEqual({ changed: 50, unchanged: 0 });
     expect(await setAccountsNewStatus(ids, false, actor, org, "FAST")).toEqual({ changed: 0, unchanged: 50 });
     expect(await setAccountsNewStatus(ids, false, actor, org)).toEqual({ changed: 50, unchanged: 0 });
