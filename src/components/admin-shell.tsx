@@ -25,7 +25,7 @@ function Brand() {
       </span>
       <span>
         <strong>redegestor</strong>
-        <small>Publicação em escala</small>
+        <small>Agendamento e análise</small>
       </span>
     </Link>
   );
