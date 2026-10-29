@@ -379,14 +379,16 @@ export async function connectFromAuthorizationCode(code: string, state: string) 
 
 type SignedRequestPayload = { user_id?: string; algorithm?: string; issued_at?: number; expires?: number };
 
-export function parseMetaSignedRequest(value: string): SignedRequestPayload {
+const INVALID_SIGNATURE = "Assinatura Meta inválida";
+
+export function parseMetaSignedRequest(value: string, secret = getEnv().INSTAGRAM_APP_SECRET): SignedRequestPayload {
   const parts = value.split(".");
   if (parts.length !== 2) throw new Error("signed_request inválido");
   const [encodedSignature, encodedPayload] = parts;
-  if (!encodedSignature || !encodedPayload || !getEnv().INSTAGRAM_APP_SECRET) throw new Error("signed_request inválido");
-  const expected = createHmac("sha256", getEnv().INSTAGRAM_APP_SECRET!).update(encodedPayload).digest();
+  if (!encodedSignature || !encodedPayload || !secret) throw new Error("signed_request inválido");
+  const expected = createHmac("sha256", secret).update(encodedPayload).digest();
   const actual = Buffer.from(encodedSignature, "base64url");
-  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw new Error("Assinatura Meta inválida");
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw new Error(INVALID_SIGNATURE);
   const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as SignedRequestPayload;
   if (payload.algorithm?.toUpperCase() !== "HMAC-SHA256") throw new Error("Algoritmo Meta inválido");
   const now = Math.floor(Date.now() / 1000);
@@ -402,8 +404,33 @@ export function parseMetaSignedRequest(value: string): SignedRequestPayload {
   return payload;
 }
 
+/**
+ * App central do env primeiro, com a busca de sempre. Senão, os Meta Apps cadastrados por clientes:
+ * o secret é escolhido pelo cliente, então só alcança as contas conectadas por aquele cadastro (metaAppIds).
+ */
+async function verifyMetaSignedRequest(value: string): Promise<{ payload: SignedRequestPayload; metaAppIds: string[] | null }> {
+  try {
+    return { payload: parseMetaSignedRequest(value), metaAppIds: null };
+  } catch (centralError) {
+    if ((centralError as Error).message !== INVALID_SIGNATURE) throw centralError;
+    const apps = await getSqlClient()<{ id: string; encrypted_app_secret: string }[]>`SELECT id, encrypted_app_secret FROM meta_apps`;
+    let payload: SignedRequestPayload | undefined;
+    const metaAppIds: string[] = [];
+    for (const app of apps) {
+      try {
+        payload = parseMetaSignedRequest(value, decryptToken(app.encrypted_app_secret));
+        metaAppIds.push(app.id);
+      } catch (error) {
+        if ((error as Error).message !== INVALID_SIGNATURE) throw error;
+      }
+    }
+    if (!payload) throw centralError;
+    return { payload, metaAppIds };
+  }
+}
+
 export async function deauthorizeBySignedRequest(signedRequest: string) {
-  const payload = parseMetaSignedRequest(signedRequest);
+  const { payload, metaAppIds } = await verifyMetaSignedRequest(signedRequest);
   if (!payload.user_id) throw new Error("Callback sem user_id app-scoped");
   const appScopedUserId = payload.user_id;
   const issuedAt = payload.issued_at!;
@@ -411,6 +438,7 @@ export async function deauthorizeBySignedRequest(signedRequest: string) {
   await getSqlClient().begin(async (sql) => {
     const [candidate] = await sql<Array<{ id: string; organization_id: string }>>`
       SELECT id, organization_id FROM instagram_accounts WHERE app_scoped_user_id = ${appScopedUserId}
+        AND (${metaAppIds}::uuid[] IS NULL OR meta_app_id = ANY(${metaAppIds}::uuid[]))
     `;
     if (!candidate) return;
     await sql`SELECT pg_advisory_xact_lock(hashtextextended(${`instagestor:meta:account:${candidate.id}:0`}, 0))`;
@@ -500,7 +528,7 @@ export async function deauthorizeBySignedRequest(signedRequest: string) {
 }
 
 export async function deleteDataBySignedRequest(signedRequest: string) {
-  const payload = parseMetaSignedRequest(signedRequest);
+  const { payload, metaAppIds } = await verifyMetaSignedRequest(signedRequest);
   if (!payload.user_id) throw new Error("Callback sem user_id app-scoped");
   const appScopedUserId = payload.user_id;
   const appScopedHash = sha256(`${appScopedUserId}|${getEnv().SESSION_SECRET}`);
@@ -516,6 +544,7 @@ export async function deleteDataBySignedRequest(signedRequest: string) {
 
     const [candidate] = await sql<Array<{ id: string; organization_id: string }>>`
       SELECT id, organization_id FROM instagram_accounts WHERE app_scoped_user_id = ${appScopedUserId}
+        AND (${metaAppIds}::uuid[] IS NULL OR meta_app_id = ANY(${metaAppIds}::uuid[]))
     `;
     if (candidate) {
       await sql`SELECT pg_advisory_xact_lock(hashtextextended(${`instagestor:meta:account:${candidate.id}:0`}, 0))`;

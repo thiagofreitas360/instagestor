@@ -136,6 +136,54 @@ describe("callbacks Meta concorrentes", () => {
     expect(afterNewRequest).toEqual({ status: "DISCONNECTED", app_scoped_user_id: null });
   });
 
+  it("aceita o secret de um Meta App de cliente, mas só para as contas conectadas por ele", async () => {
+    const sql = getSqlClient();
+    const otherOrganizationId = randomUUID();
+    await createOrganization(otherOrganizationId, "Outro cliente", `outro-${otherOrganizationId}`);
+    const clientSecret = "segredo-escolhido-pelo-cliente";
+    const [clientApp] = await sql<{ id: string }[]>`
+      INSERT INTO meta_apps (organization_id, name, app_id, encrypted_app_secret)
+      VALUES (${TEST_ORGANIZATION_ID}, 'App do cliente', '1234567890', ${encryptToken(clientSecret)})
+      RETURNING id
+    `;
+    const appScopedId = `app-${randomUUID()}`;
+    const [own] = await sql<{ id: string }[]>`
+      INSERT INTO instagram_accounts (
+        organization_id, instagram_user_id, app_scoped_user_id, username, encrypted_access_token, meta_app_id, authorized_at
+      ) VALUES (
+        ${TEST_ORGANIZATION_ID}, ${`ig-${randomUUID()}`}, ${appScopedId}, 'via_app_cliente', ${encryptToken("t1")}, ${clientApp.id},
+        now() - interval '1 day'
+      )
+      RETURNING id
+    `;
+    const victimScopedId = `app-${randomUUID()}`;
+    const [victim] = await sql<{ id: string }[]>`
+      INSERT INTO instagram_accounts (organization_id, instagram_user_id, app_scoped_user_id, username, encrypted_access_token, authorized_at)
+      VALUES (${otherOrganizationId}, ${`ig-${randomUUID()}`}, ${victimScopedId}, 'outro_cliente', ${encryptToken("t2")}, now() - interval '1 day')
+      RETURNING id
+    `;
+    const signWithClientSecret = (userId: string) => {
+      const payload = Buffer.from(JSON.stringify({
+        user_id: userId, algorithm: "HMAC-SHA256", issued_at: Math.floor(Date.now() / 1000),
+      })).toString("base64url");
+      return `${createHmac("sha256", clientSecret).update(payload).digest("base64url")}.${payload}`;
+    };
+
+    await deauthorizeBySignedRequest(signWithClientSecret(appScopedId));
+    await deauthorizeBySignedRequest(signWithClientSecret(victimScopedId));
+    await deleteDataBySignedRequest(signWithClientSecret(victimScopedId));
+
+    const statuses = await sql<{ id: string; status: string }[]>`
+      SELECT id, status FROM instagram_accounts WHERE id IN (${own.id}, ${victim.id})
+    `;
+    expect(Object.fromEntries(statuses.map((row) => [row.id, row.status]))).toEqual({
+      [own.id]: "DISCONNECTED",
+      [victim.id]: "CONNECTED",
+    });
+    await expect(deauthorizeBySignedRequest(signDeauthorization(appScopedId, 1).replace(/^[^.]+/, "assinatura"))).rejects
+      .toThrow("Assinatura Meta");
+  });
+
   it("apaga métricas e mídias da conta ao processar exclusão de dados", async () => {
     const sql = getSqlClient();
     const appScopedId = `app-${randomUUID()}`;

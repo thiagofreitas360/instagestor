@@ -59,8 +59,8 @@ Em **App Dashboard > Verificações > Access Verification**. Exige Business Veri
 1. Login no InstaGestor.
 2. Tela **Contas**.
 3. Clique **Conectar Instagram**.
-4. Popup oficial do Instagram e concessão da permissão.
-5. Popup fecha sozinho e a lista de contas atualiza.
+4. Tela oficial do Instagram (na mesma aba) e concessão da permissão.
+5. Retorno automático para **Contas** com a mensagem de sucesso.
 6. Conta exibida com username/ID e tipo de conta.
 7. Se endpoints forem mostrados, exibir apenas o nome `GET /me`; ocultar token e headers.
 
@@ -107,8 +107,8 @@ Grave em uma tomada contínua ou com cortes claramente identificados:
 1. Abrir a URL pública de staging e fazer login com a credencial de reviewer.
 2. Abrir **Contas**.
 3. Clicar **Conectar Instagram**.
-4. Mostrar o popup do Business Login for Instagram e autorizar os três scopes.
-5. Mostrar o popup fechando e a lista de contas atualizando sozinha.
+4. Mostrar a tela do Business Login for Instagram (mesma aba) e autorizar os três scopes.
+5. Mostrar o retorno automático para **Contas** com a conta na lista.
 6. Mostrar a conta conectada com username, ID e status, cobrindo `instagram_business_basic`.
 7. Abrir **Mídias** e enviar uma imagem JPEG de teste.
 8. Abrir **Campanhas**, criar Feed de imagem, selecionar a conta e preencher caption.
@@ -131,8 +131,8 @@ Test admin password: [REVIEWER_PASSWORD]
 Steps:
 1. Sign in with the test administrator credentials.
 2. Open Accounts in the left navigation.
-3. Select "Conectar Instagram" (Connect Instagram). A popup with the official Instagram login opens; if the browser blocks it, select "Continuar nesta aba" (Continue in this tab).
-4. Complete Business Login for Instagram using the professional test account supplied in the secure App Review fields. The popup closes and the account list refreshes automatically.
+3. Select "Conectar Instagram" (Connect Instagram). The same tab navigates to the official Instagram login.
+4. Complete Business Login for Instagram using the professional test account supplied in the secure App Review fields. You are redirected back to Accounts with a success message.
 5. Confirm that the account username and ID appear in Accounts.
 6. Open "Mídias" (Media) and upload the supplied JPEG test file.
 7. Open "Campanhas" (Campaigns), create a Feed image campaign, select the connected account, add the supplied caption, and confirm publication.
