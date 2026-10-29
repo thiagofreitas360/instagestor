@@ -18,7 +18,7 @@ const jetBrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "InstaGestor",
+  title: "redegestor",
   description: "Gerenciamento interno de publicações do Instagram",
 };
 

@@ -5,5 +5,5 @@ export const COMPANY = {
   address: "Av. das Américas, 4200, Bloco 01, Sala 305, Barra da Tijuca, Rio de Janeiro - RJ, CEP 22640-907",
   privacyEmail: "suporte@carlamatos.online",
   domain: "instagestor.orbih.shop",
-  updatedAt: "04/10/2026",
+  updatedAt: "29/10/2026",
 };

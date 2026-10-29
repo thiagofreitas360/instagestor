@@ -41,7 +41,7 @@ const SECONDARY_CARDS: Array<{ label: string; key: keyof Totals }> = [
   { label: "Respostas de story", key: "replies" },
   { label: "Contas engajadas", key: "accountsEngaged" },
   { label: "Mídias no período", key: "mediaCount" },
-  { label: "Publicadas via InstaGestor", key: "mediaByTool" },
+  { label: "Publicadas via redegestor", key: "mediaByTool" },
 ];
 
 function first(value?: string | string[]) {
@@ -373,7 +373,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
                             ) : null}
                             <span className="cell-wrap">{row.caption?.slice(0, 60) || row.id}</span>
                           </a>
-                          {row.published_job_id ? <span className="status-badge status-success">via InstaGestor</span> : null}
+                          {row.published_job_id ? <span className="status-badge status-success">via redegestor</span> : null}
                         </td>
                         <td data-label="Conta">@{row.username}</td>
                         <td data-label="Tipo">{productLabel(row.product_type)}</td>

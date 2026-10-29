@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { COMPANY } from "@/lib/company";
 
-export const metadata = { title: "Privacidade — InstaGestor" };
+export const metadata = { title: "Privacidade — redegestor" };
 
 export default function PrivacyPage() {
   return (
@@ -10,11 +10,11 @@ export default function PrivacyPage() {
       <p>Última atualização: {COMPANY.updatedAt}.</p>
 
       <h2>1. Quem somos</h2>
-      <p>O InstaGestor ({COMPANY.domain}) é operado por {COMPANY.legalName}, CNPJ {COMPANY.cnpj}, com endereço em {COMPANY.address}. É uma plataforma usada por empresas clientes para publicar, agendar e analisar conteúdo em contas profissionais do Instagram que elas possuem ou estão autorizadas a gerenciar.</p>
-      <p>Para os dados das contas conectadas, a empresa cliente é a controladora e o InstaGestor atua como operador, tratando os dados somente para prestar o serviço contratado (LGPD, Lei 13.709/2018). Para os dados de cadastro dos usuários da plataforma, o InstaGestor é o controlador.</p>
+      <p>O redegestor ({COMPANY.domain}) é operado por {COMPANY.legalName}, CNPJ {COMPANY.cnpj}, com endereço em {COMPANY.address}. É uma plataforma usada por empresas clientes para publicar, agendar e analisar conteúdo em contas profissionais do Instagram que elas possuem ou estão autorizadas a gerenciar.</p>
+      <p>Para os dados das contas conectadas, a empresa cliente é a controladora e o redegestor atua como operador, tratando os dados somente para prestar o serviço contratado (LGPD, Lei 13.709/2018). Para os dados de cadastro dos usuários da plataforma, o redegestor é o controlador.</p>
 
       <h2>2. Como as contas do Instagram são conectadas</h2>
-      <p>A conexão é feita exclusivamente pelo login oficial da Meta (Business Login for Instagram). O InstaGestor nunca solicita, recebe ou armazena a senha do Instagram. A Meta entrega um token de acesso que é guardado criptografado (AES-256-GCM) e nunca é exibido no navegador.</p>
+      <p>A conexão é feita exclusivamente pelo login oficial da Meta (Business Login for Instagram). O redegestor nunca solicita, recebe ou armazena a senha do Instagram. A Meta entrega um token de acesso que é guardado criptografado (AES-256-GCM) e nunca é exibido no navegador.</p>
 
       <h2>3. Dados obtidos da Meta e finalidade</h2>
       <ul>

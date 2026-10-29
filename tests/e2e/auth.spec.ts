@@ -12,7 +12,7 @@ test("renderiza o login com o layout visual esperado", async ({ page }) => {
 test("protege o painel, autentica o administrador e encerra a sessão", async ({ page }) => {
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/\/login(?:[/?#]|$)/);
-  await expect(page.getByRole("heading", { name: "Entrar no InstaGestor" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Entrar no redegestor" })).toBeVisible();
 
   await page.getByLabel("E-mail").fill(adminEmail);
   await page.getByLabel("Senha").fill(adminPassword);

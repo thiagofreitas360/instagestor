@@ -12,7 +12,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
       <section className="login-card" aria-labelledby="login-title">
         <div className="brand-mark" aria-hidden="true">IG</div>
         <p className="eyebrow">Painel interno</p>
-        <h1 id="login-title">Entrar no InstaGestor</h1>
+        <h1 id="login-title">Entrar no redegestor</h1>
         <p className="muted">Acesso exclusivo do administrador.</p>
         {erro && <p className="inline-error" role="alert">{erro}</p>}
         <form action={loginAction} className="form-stack">

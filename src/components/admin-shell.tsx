@@ -19,12 +19,12 @@ const platformNavigation = [{ href: "/admin/clientes", label: "Clientes", mark: 
 
 function Brand() {
   return (
-    <Link className="brand" href="/dashboard" aria-label="InstaGestor — ir para o dashboard">
+    <Link className="brand" href="/dashboard" aria-label="redegestor — ir para o dashboard">
       <span className="brand-mark" aria-hidden="true">
-        IG
+        RG
       </span>
       <span>
-        <strong>InstaGestor</strong>
+        <strong>redegestor</strong>
         <small>Publicação em escala</small>
       </span>
     </Link>

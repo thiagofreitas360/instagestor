@@ -123,7 +123,7 @@ export default async function MetaAppsPage({ searchParams }: PageProps) {
           ) : (
             <EmptyState
               title="Nenhum Meta App cadastrado"
-              description="Enquanto não houver apps próprios, as conexões usam o app central do InstaGestor."
+              description="Enquanto não houver apps próprios, as conexões usam o app central do redegestor."
             />
           )}
         </Panel>

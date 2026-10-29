@@ -102,7 +102,7 @@ Estados internos mínimos sugeridos:
 |---|---|
 | `RECEIVED` | Recebemos o pedido e ele aguarda processamento. |
 | `IN_PROGRESS` | A exclusão está em processamento. |
-| `COMPLETED` | Os dados aplicáveis mantidos pelo InstaGestor foram excluídos ou anonimizados. |
+| `COMPLETED` | Os dados aplicáveis mantidos pelo redegestor foram excluídos ou anonimizados. |
 | `REFUSED` | A exclusão não foi integralmente executada; a página deve informar justificativa legítima e canal de contato. |
 
 A Meta não fixa SLA numérico na página consultada, mas orienta tratamento rápido. Não prometer prazo não aprovado pelo responsável legal.

@@ -42,21 +42,21 @@ Os rótulos são os documentados em 01/09/2026. Se divergirem, **verificar no pa
 
 Em **App Dashboard > Verificações > Access Verification**. Exige Business Verification concluída.
 
-> InstaGestor is a social media management platform operated by POTENCIALIZE DIGITAL LTDA (CNPJ 63.946.775/0001-74) for small and medium businesses. Each client business gets an isolated workspace in which its own users connect the Instagram professional accounts the business owns or is authorized to manage, one account per authorization, through Business Login for Instagram in the official Meta window. InstaGestor never asks for or stores Instagram passwords; access tokens are stored encrypted (AES-256-GCM) and are never sent to the browser.
+> redegestor is a social media management platform operated by POTENCIALIZE DIGITAL LTDA (CNPJ 63.946.775/0001-74) for small and medium businesses. Each client business gets an isolated workspace in which its own users connect the Instagram professional accounts the business owns or is authorized to manage, one account per authorization, through Business Login for Instagram in the official Meta window. redegestor never asks for or stores Instagram passwords; access tokens are stored encrypted (AES-256-GCM) and are never sent to the browser.
 >
 > We access only three permissions: instagram_business_basic (to identify the connected account), instagram_business_content_publish (to publish and schedule organic Feed, Reels, Stories and carousel posts that the business creates and explicitly confirms) and instagram_business_manage_insights (to show the business performance reports for its own accounts). We do not use messaging, comments, ads or any private API, scraping or browser automation.
 >
-> Every record is scoped to the client organization; an Instagram account can belong to only one organization at a time, and an attempt to connect an account that already belongs to another client is rejected without revealing that client. Data is never sold, used for advertising or shared between clients. Businesses can disconnect an account at any time in InstaGestor or remove the app in Instagram settings; we implement the deauthorization and data deletion callbacks, which delete the token and remove or anonymize the account data. Privacy policy: https://instagestor.orbih.shop/privacy. Data deletion: https://instagestor.orbih.shop/data-deletion.
+> Every record is scoped to the client organization; an Instagram account can belong to only one organization at a time, and an attempt to connect an account that already belongs to another client is rejected without revealing that client. Data is never sold, used for advertising or shared between clients. Businesses can disconnect an account at any time in redegestor or remove the app in Instagram settings; we implement the deauthorization and data deletion callbacks, which delete the token and remove or anonymize the account data. Privacy policy: https://instagestor.orbih.shop/privacy. Data deletion: https://instagestor.orbih.shop/data-deletion.
 
 ## Texto sugerido — `instagram_business_basic`
 
 ### Justificativa em inglês
 
-> InstaGestor is a multi-tenant web platform that lets client businesses connect and manage the Instagram professional accounts they own or are authorized to manage. Each business works in an isolated workspace. After a business user selects “Connect Instagram” and completes Business Login for Instagram in the official Meta window, the application uses `instagram_business_basic` to retrieve the account's app-scoped ID, professional account ID, username, name, account type, and profile picture. This data is shown only to that business, in the Accounts screen, so the user can identify the correct publishing destination and monitor connection status. InstaGestor does not use this permission for messaging, comments, ads, scraping, or consumer accounts.
+> redegestor is a multi-tenant web platform that lets client businesses connect and manage the Instagram professional accounts they own or are authorized to manage. Each business works in an isolated workspace. After a business user selects “Connect Instagram” and completes Business Login for Instagram in the official Meta window, the application uses `instagram_business_basic` to retrieve the account's app-scoped ID, professional account ID, username, name, account type, and profile picture. This data is shown only to that business, in the Accounts screen, so the user can identify the correct publishing destination and monitor connection status. redegestor does not use this permission for messaging, comments, ads, scraping, or consumer accounts.
 
 ### O screencast precisa mostrar
 
-1. Login no InstaGestor.
+1. Login no redegestor.
 2. Tela **Contas**.
 3. Clique **Conectar Instagram**.
 4. Tela oficial do Instagram (na mesma aba) e concessão da permissão.
@@ -70,7 +70,7 @@ Essa demonstração acompanha os requisitos da [Permissions reference](https://d
 
 ### Justificativa em inglês
 
-> InstaGestor lets client businesses publish and schedule organic content to the Instagram professional accounts they own or are authorized to manage. A business user uploads media, writes or reviews the caption, selects the destination account, previews the schedule, and explicitly confirms the campaign. At execution time, the application uses `instagram_business_content_publish` to create an Instagram media container, monitor video/container readiness when applicable, and publish the approved container. The application displays the resulting Instagram media ID and status. It does not publish ads, messages, comments, or content to consumer accounts, and it does not publish without a campaign created and confirmed by a user of the business that owns the account.
+> redegestor lets client businesses publish and schedule organic content to the Instagram professional accounts they own or are authorized to manage. A business user uploads media, writes or reviews the caption, selects the destination account, previews the schedule, and explicitly confirms the campaign. At execution time, the application uses `instagram_business_content_publish` to create an Instagram media container, monitor video/container readiness when applicable, and publish the approved container. The application displays the resulting Instagram media ID and status. It does not publish ads, messages, comments, or content to consumer accounts, and it does not publish without a campaign created and confirmed by a user of the business that owns the account.
 
 ### O screencast precisa mostrar
 
@@ -81,7 +81,7 @@ Essa demonstração acompanha os requisitos da [Permissions reference](https://d
 5. Preview da conta e do horário.
 6. Confirmação explícita da campanha.
 7. Processamento do container e publicação.
-8. Status **Publicado** e IG Media ID no InstaGestor.
+8. Status **Publicado** e IG Media ID no redegestor.
 9. O post resultante no Instagram nativo/web.
 
 A [Permissions reference](https://developers.facebook.com/docs/permissions#instagram_business_basic) pede demonstrar criação de um novo post orgânico de Feed, caption/hashtags/metadados e resultado no Feed. Use imagem no teste principal; Reel/Story/Carousel podem ser mostrados depois, sem tornar a gravação principal ambígua.
@@ -90,7 +90,7 @@ A [Permissions reference](https://developers.facebook.com/docs/permissions#insta
 
 ### Justificativa em inglês
 
-> InstaGestor shows each client business the performance of the Instagram professional accounts it owns or is authorized to manage. After a business user connects an account with Business Login for Instagram, a background worker periodically calls the account insights endpoint (reach, views, profile views, accounts engaged, interactions, follower count) and the media insights endpoint for recent posts, reels and stories. The results are stored and displayed in the Analytics screen, aggregated across all connected accounts and per account, only to that business, so it can compare its accounts, track follower growth and identify the best-performing content. InstaGestor does not use insights for ads, does not expose them to third parties and does not access consumer accounts.
+> redegestor shows each client business the performance of the Instagram professional accounts it owns or is authorized to manage. After a business user connects an account with Business Login for Instagram, a background worker periodically calls the account insights endpoint (reach, views, profile views, accounts engaged, interactions, follower count) and the media insights endpoint for recent posts, reels and stories. The results are stored and displayed in the Analytics screen, aggregated across all connected accounts and per account, only to that business, so it can compare its accounts, track follower growth and identify the best-performing content. redegestor does not use insights for ads, does not expose them to third parties and does not access consumer accounts.
 
 ### O screencast precisa mostrar
 

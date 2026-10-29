@@ -3,7 +3,7 @@ import { COMPANY } from "@/lib/company";
 import { findDeletionStatus } from "@/server/accounts";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Exclusão de dados — InstaGestor" };
+export const metadata = { title: "Exclusão de dados — redegestor" };
 
 export default async function DataDeletionPage({ searchParams }: { searchParams: Promise<{ code?: string }> }) {
   const { code } = await searchParams;
@@ -19,9 +19,9 @@ export default async function DataDeletionPage({ searchParams }: { searchParams:
         )
       ) : (
         <>
-          <p>Você pode pedir a exclusão dos dados de uma conta do Instagram conectada ao InstaGestor de duas formas:</p>
+          <p>Você pode pedir a exclusão dos dados de uma conta do Instagram conectada ao redegestor de duas formas:</p>
           <ol>
-            <li>No Instagram, acesse Configurações → Apps e sites, remova o InstaGestor e solicite a exclusão. A Meta nos avisa automaticamente e você recebe um código para acompanhar o pedido nesta página.</li>
+            <li>No Instagram, acesse Configurações → Apps e sites, remova o redegestor e solicite a exclusão. A Meta nos avisa automaticamente e você recebe um código para acompanhar o pedido nesta página.</li>
             <li>Envie um e-mail para {COMPANY.privacyEmail} informando o nome de usuário da conta.</li>
           </ol>
           <p>Mantemos sobre a conta: identificadores, nome de usuário, nome, foto, tipo de conta, biografia, site, token de acesso criptografado, limite de publicação, métricas da conta e das mídias e o histórico das publicações feitas pela plataforma.</p>
