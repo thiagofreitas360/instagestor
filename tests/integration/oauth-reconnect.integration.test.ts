@@ -5,7 +5,7 @@ import { decryptToken } from "@/lib/crypto";
 import { resetEnvForTests } from "@/lib/env";
 import { MetaInstagramProvider } from "@/providers/meta-instagram";
 import { connectFromAuthorizationCode, consumeOauthState, createOauthState } from "@/server/accounts";
-import { deleteMetaApp, listMetaApps, saveMetaApp } from "@/server/meta-apps";
+import { deleteMetaApp, findAccountMetaAppId, listMetaApps, saveMetaApp } from "@/server/meta-apps";
 import { createAccounts, createOrganization, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 function metaReturns(profileId: string) {
@@ -120,7 +120,8 @@ describe("Meta Apps por cliente", () => {
     await saveMetaApp(TEST_ORGANIZATION_ID, userId, { id: app.id, name: "App A2", appId: "1234567890123" });
 
     metaReturns("via-app");
-    await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId, undefined, app.id));
+    const accountId = await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId, undefined, app.id));
+    expect(await findAccountMetaAppId(TEST_ORGANIZATION_ID, accountId)).toBe(app.id);
     expect(MetaInstagramProvider.prototype.exchangeAuthorizationCode).toHaveBeenCalledWith("code", {
       appId: "1234567890123", appSecret: "secret-app-a-0123456789",
     });

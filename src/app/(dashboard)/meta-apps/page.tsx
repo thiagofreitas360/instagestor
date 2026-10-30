@@ -22,7 +22,7 @@ export default async function MetaAppsPage({ searchParams }: PageProps) {
       <PageHeader
         eyebrow="Canais"
         title="Meta Apps"
-        description="Cadastre os apps do Meta for Developers deste cliente e distribua as contas do Instagram entre eles. Cada conta fica vinculada ao app pelo qual foi conectada; publicações, loops e métricas funcionam igual."
+        description="Apps do Meta for Developers deste cliente. Eles ficam só para manter as contas já conectadas por eles: reconexão, renovação e callbacks seguem pelo mesmo app. Contas novas entram sempre pelo app oficial do redegestor."
       />
       <MessageBanner error={first(query.erro)} success={first(query.ok)} />
 
@@ -108,7 +108,7 @@ export default async function MetaAppsPage({ searchParams }: PageProps) {
                             <input type="hidden" name="id" value={app.id} />
                             <ConfirmSubmitButton
                               className="button button-small button-quiet-danger"
-                              message={`Remover o app "${app.name}"? As ${app.account_count} conta(s) conectadas por ele continuam publicando, mas novas conexões não poderão usá-lo.`}
+                              message={`Remover o app "${app.name}"? As ${app.account_count} conta(s) conectadas por ele continuam publicando; se precisarem reconectar, passam a usar o app oficial.`}
                             >
                               Remover
                             </ConfirmSubmitButton>
@@ -123,7 +123,7 @@ export default async function MetaAppsPage({ searchParams }: PageProps) {
           ) : (
             <EmptyState
               title="Nenhum Meta App cadastrado"
-              description="Enquanto não houver apps próprios, as conexões usam o app central do redegestor."
+              description="Contas novas entram sempre pelo app oficial do redegestor. Apps aqui servem só para contas já conectadas por eles."
             />
           )}
         </Panel>

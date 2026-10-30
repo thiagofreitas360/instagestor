@@ -67,3 +67,11 @@ export async function getMetaAppCredentials(organizationId: string, id: string) 
   if (!app) throw new OauthFlowError("connection_failed", "Meta App da conexão não encontrado");
   return { appId: app.app_id, appSecret: decryptToken(app.encrypted_app_secret) };
 }
+
+/** App pelo qual a conta foi conectada (undefined = app oficial). A reconexão fica sempre nele. */
+export async function findAccountMetaAppId(organizationId: string, accountId: string) {
+  const [account] = await getSqlClient()<{ meta_app_id: string | null }[]>`
+    SELECT meta_app_id FROM instagram_accounts WHERE organization_id = ${organizationId} AND id = ${accountId}
+  `;
+  return account?.meta_app_id ?? undefined;
+}

@@ -17,7 +17,6 @@ import {
 } from "@/components/ui";
 import { loadAnalytics, resolvePeriod } from "@/server/analytics";
 import { requireAdmin } from "@/server/auth";
-import { listMetaApps } from "@/server/meta-apps";
 import { InstagramConnectButton } from "@/components/instagram-connect-button";
 import { AccountNewStatusForm, AccountWarmupForm } from "@/components/account-bulk-selection";
 import { AccountWarmupBadge } from "@/components/account-warmup-badge";
@@ -77,7 +76,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
   const user = await requireAdmin();
   const [{ id }, query] = await Promise.all([params, searchParams]);
   const sql = getSqlClient();
-  const [[account], groups, [stats], jobs, apps, [lastPeriod]] = await Promise.all([
+  const [[account], groups, [stats], jobs, [lastPeriod]] = await Promise.all([
     sql<Account[]>`
       SELECT id, instagram_user_id, username, display_name, profile_picture_url, account_type, status, is_new_account, warmup_profile,
         token_expires_at, token_last_refreshed_at, token_last_checked_at,
@@ -111,7 +110,6 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
       ORDER BY job.updated_at DESC
       LIMIT 12
     `,
-    listMetaApps(user.organizationId),
     sql<Array<{ activity: { startedAt: string | null; endedAt: string; days: number | null; estimated: boolean } }>>`
       SELECT metadata_json->'activity' AS activity FROM audit_logs
       WHERE organization_id = ${user.organizationId} AND entity_type = 'instagram_account' AND entity_id = ${id}
@@ -144,7 +142,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
         actions={
           <>
             {mustReconnect ? (
-              <InstagramConnectButton accountId={account.id} apps={apps}>Reconectar via Meta</InstagramConnectButton>
+              <InstagramConnectButton accountId={account.id}>Reconectar via Meta</InstagramConnectButton>
             ) : (
               <form action={verifyAccountAction}>
                 <input type="hidden" name="accountId" value={account.id} />
