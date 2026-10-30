@@ -682,6 +682,8 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--brand); 
 .metric-delta-neutral { color: var(--text-soft); }
 .analytics-filters { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; }
 .analytics-filters label { display: grid; gap: 0.25rem; font-size: 0.8125rem; }
+.analytics-filters .custom-range { display: contents; }
+.analytics-filters:has(select[name="periodo"] option:not([value="personalizado"]):checked) .custom-range { display: none; }
 .account-activity { display: grid; gap: 0.25rem; min-width: 145px; }
 .account-activity strong { font-size: inherit; }
 .analytics-search { position: relative; }

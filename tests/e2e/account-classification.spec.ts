@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
-import { login, withE2EDatabase } from "./helpers";
+import { futureLocalDateTime, login, withE2EDatabase } from "./helpers";
 
 test("não aplica aquecimento por padrão, muda perfis de 50 contas, combina filtros e desliga o aquecimento", async ({ page }, testInfo) => {
   const prefix = `classificacao_${randomUUID().slice(0, 8)}`;
@@ -72,6 +72,24 @@ test("não aplica aquecimento por padrão, muda perfis de 50 contas, combina fil
   await page.getByRole("combobox", { name: "Tipo de conta", exact: true }).selectOption("antigas");
   await page.getByRole("button", { name: "Aplicar filtros", exact: true }).click();
   await expect(page.locator("tbody tr")).toHaveCount(50);
+
+  // Filtro por data: as contas da fixture começaram a funcionar agora.
+  await page.goto(`/contas?busca=${prefix}&periodo=ontem`);
+  await expect(page.locator("tbody tr")).toHaveCount(0);
+  await page.getByRole("combobox", { name: "Conectadas em", exact: true }).selectOption("hoje");
+  await page.getByRole("button", { name: "Aplicar filtros", exact: true }).click();
+  await expect(page.locator("tbody tr")).toHaveCount(50);
+  await page.getByRole("link", { name: "Conectadas", exact: true }).click();
+  await expect(page).toHaveURL(/periodo=hoje/);
+  await expect(page.locator("tbody tr")).toHaveCount(25);
+  await page.getByRole("combobox", { name: "Conectadas em", exact: true }).selectOption("personalizado");
+  await page.getByLabel("De", { exact: true }).fill(futureLocalDateTime(0).slice(0, 10));
+  await page.getByRole("button", { name: "Aplicar filtros", exact: true }).click();
+  await expect(page).toHaveURL(/periodo=personalizado&de=\d{4}-\d{2}-\d{2}/);
+  await expect(page.locator("tbody tr")).toHaveCount(25);
+  await page.getByLabel("Até", { exact: true }).fill(futureLocalDateTime(-48 * 60).slice(0, 10));
+  await page.getByRole("button", { name: "Aplicar filtros", exact: true }).click();
+  await expect(page.locator("tbody tr")).toHaveCount(0);
 
   await page.goto(`/contas/${firstId}`);
   await page.getByRole("switch", { name: "Aquecimento automático", exact: true }).check();

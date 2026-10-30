@@ -13,6 +13,25 @@ export function activityPeriodRange(period: ActivityPeriod, timezone: string, no
   return { from: from.toJSDate(), to: to.toJSDate() };
 }
 
+export type DateRange = { from?: Date; to?: Date };
+
+/** Intervalo [de 00:00, até 24:00) no fuso da organização; cada extremo é opcional e datas inválidas são ignoradas. */
+export function customPeriodRange(from: string | undefined, to: string | undefined, timezone: string): DateRange | undefined {
+  const day = (value?: string) => {
+    const parsed = value ? DateTime.fromISO(value, { zone: timezone }) : undefined;
+    return parsed?.isValid ? parsed.startOf("day") : undefined;
+  };
+  const start = day(from);
+  const end = day(to);
+  if (!start && !end) return undefined;
+  return { from: start?.toJSDate(), to: end?.plus({ days: 1 }).toJSDate() };
+}
+
+export function inDateRange(date: Date | null, range: DateRange | undefined) {
+  if (!range) return true;
+  return Boolean(date && (!range.from || date >= range.from) && (!range.to || date < range.to));
+}
+
 type Timestamp = Date | string | null;
 
 export type AccountActivityDates = {

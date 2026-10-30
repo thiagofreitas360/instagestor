@@ -7,7 +7,7 @@ import { InstagramConnectButton } from "@/components/instagram-connect-button";
 import { AccountBulkSelection } from "@/components/account-bulk-selection";
 import { AccountWarmupBadge } from "@/components/account-warmup-badge";
 import { AccountActivity } from "@/components/account-activity";
-import { accountActivity, ACTIVITY_PERIODS, activityPeriodRange, type AccountActivityDates, type ActivityPeriod } from "@/lib/account-activity";
+import { accountActivity, ACTIVITY_PERIODS, activityPeriodRange, customPeriodRange, inDateRange, type AccountActivityDates, type ActivityPeriod } from "@/lib/account-activity";
 import { accountWarmup, WARMUP_PROFILES, type WarmupProfile } from "@/lib/account-warmup";
 import { CONNECTION_MODES, connectionModeLabel, reconnectStatsByMode, type ConnectionMode } from "@/lib/account-connection-mode";
 import { requireAdmin } from "@/server/auth";
@@ -38,7 +38,7 @@ type AccountRow = AccountActivityDates & {
 type GroupRow = { id: string; name: string };
 
 type PageProps = {
-  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[]; perfil?: string | string[]; vinculo?: string | string[]; periodo?: string | string[]; conexao?: string | string[]; conectada?: string | string[]; conectadas_em?: string | string[] }>;
+  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[]; perfil?: string | string[]; vinculo?: string | string[]; periodo?: string | string[]; de?: string | string[]; ate?: string | string[]; conexao?: string | string[]; conectada?: string | string[]; conectadas_em?: string | string[] }>;
 };
 
 function first(value?: string | string[]) {
@@ -91,17 +91,18 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const connected = accounts.filter((account) => ["CONNECTED", "TOKEN_EXPIRING"].includes(account.status)).length;
   const needsAttention = accounts.filter((account) => ["REAUTH_REQUIRED", "ERROR"].includes(account.status)).length;
   const selectedFilter = first(params.filtro) ?? "todas";
-  const periodFilterable = selectedFilter === "conectadas" || selectedFilter === "reconectar";
+  // Filtro por data em qualquer aba: presets ou intervalo personalizado (de/até, só quando periodo=personalizado).
   const requestedPeriod = first(params.periodo);
-  const selectedPeriod = periodFilterable && requestedPeriod && Object.hasOwn(ACTIVITY_PERIODS, requestedPeriod)
-    ? requestedPeriod as ActivityPeriod : undefined;
-  const periodRange = selectedPeriod ? activityPeriodRange(selectedPeriod, setting.default_timezone) : undefined;
-  // Conectadas filtram pela data de conexão; Reconectar, pela data em que a conta parou de funcionar.
+  const selectedPeriod = requestedPeriod && (Object.hasOwn(ACTIVITY_PERIODS, requestedPeriod) || requestedPeriod === "personalizado")
+    ? requestedPeriod as ActivityPeriod | "personalizado" : undefined;
+  const customFrom = selectedPeriod === "personalizado" ? (first(params.de) ?? "") : "";
+  const customTo = selectedPeriod === "personalizado" ? (first(params.ate) ?? "") : "";
+  const periodRange = selectedPeriod === "personalizado" ? customPeriodRange(customFrom, customTo, setting.default_timezone)
+    : selectedPeriod ? activityPeriodRange(selectedPeriod, setting.default_timezone) : undefined;
+  // A data é a de conexão; na aba Reconectar, a data em que a conta parou de funcionar.
   const inPeriod = (account: AccountRow) => {
-    if (!periodRange) return true;
     const activity = accountActivity(account);
-    const date = selectedFilter === "conectadas" ? activity.startedAt : activity.endedAt;
-    return Boolean(date && date >= periodRange.from && date < periodRange.to);
+    return inDateRange(selectedFilter === "reconectar" ? activity.endedAt : activity.startedAt, periodRange);
   };
   const unlinked = first(params.vinculo) === "nao_vinculadas";
   const requestedNiche = first(params.nicho);
@@ -130,10 +131,11 @@ export default async function AccountsPage({ searchParams }: PageProps) {
     if (selectedNiche && !account.group_ids.includes(selectedNiche)) return false;
     if (normalizedSearch && !account.username.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
       && !account.display_name?.toLocaleLowerCase("pt-BR").includes(normalizedSearch)) return false;
-    if (selectedFilter === "conectadas") return account.status === "CONNECTED" && inPeriod(account);
+    if (!inPeriod(account)) return false;
+    if (selectedFilter === "conectadas") return account.status === "CONNECTED";
     if (selectedFilter === "problema") return ["ERROR", "DISABLED"].includes(account.status);
     if (selectedFilter === "expirando") return account.status === "TOKEN_EXPIRING";
-    if (selectedFilter === "reconectar") return account.status === "REAUTH_REQUIRED" && inPeriod(account);
+    if (selectedFilter === "reconectar") return account.status === "REAUTH_REQUIRED";
     if (selectedFilter === "banidas") return account.status === "BANNED";
     return true;
   });
@@ -146,12 +148,13 @@ export default async function AccountsPage({ searchParams }: PageProps) {
     ...(selectedProfile ? { perfil: selectedProfile } : {}),
     ...(selectedMode ? { conexao: selectedMode } : {}),
     ...(statsPeriod ? { conectadas_em: statsPeriod } : {}),
+    ...(selectedPeriod ? { periodo: selectedPeriod } : {}),
+    ...(customFrom ? { de: customFrom } : {}), ...(customTo ? { ate: customTo } : {}),
     ...(selectedNiche ? { nicho: selectedNiche } : {}), ...(search ? { busca: search } : {}),
   };
   const returnParams = new URLSearchParams({
     ...baseParams,
     ...(selectedFilter !== "todas" ? { filtro: selectedFilter } : {}),
-    ...(selectedPeriod ? { periodo: selectedPeriod } : {}),
   });
   const returnTo = `/contas${returnParams.size ? `?${returnParams}` : ""}`;
 
@@ -179,12 +182,30 @@ export default async function AccountsPage({ searchParams }: PageProps) {
 
       <form className="analytics-filters" method="get" action="/contas">
         {selectedFilter !== "todas" ? <input type="hidden" name="filtro" value={selectedFilter} /> : null}
-        {selectedPeriod ? <input type="hidden" name="periodo" value={selectedPeriod} /> : null}
         {statsPeriod ? <input type="hidden" name="conectadas_em" value={statsPeriod} /> : null}
         <label>
           Buscar conta
           <input name="busca" type="search" defaultValue={search} placeholder="@usuario ou nome" />
         </label>
+        <label>
+          {selectedFilter === "reconectar" ? "Desconectadas em" : "Conectadas em"}
+          <select name="periodo" defaultValue={selectedPeriod ?? ""}>
+            <option value="">Qualquer data</option>
+            {Object.entries(ACTIVITY_PERIODS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            <option value="personalizado">Personalizado</option>
+          </select>
+        </label>
+        {/* Visível só com "Personalizado" (CSS :has); sem suporte a :has fica sempre visível. */}
+        <span className="custom-range">
+          <label>
+            De
+            <input name="de" type="date" defaultValue={customFrom} />
+          </label>
+          <label>
+            Até
+            <input name="ate" type="date" defaultValue={customTo} />
+          </label>
+        </span>
         <label>
           Vínculo com loop
           <select name="vinculo" defaultValue={unlinked ? "nao_vinculadas" : ""}>
@@ -239,7 +260,6 @@ export default async function AccountsPage({ searchParams }: PageProps) {
             href={`/contas?${new URLSearchParams({
               ...baseParams,
               ...(value === "todas" ? {} : { filtro: value }),
-              ...(selectedPeriod && ["conectadas", "reconectar"].includes(value) ? { periodo: selectedPeriod } : {}),
             }).toString()}`.replace(/\?$/, "")}
             key={value}
           >
@@ -247,21 +267,6 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           </Link>
         ))}
       </nav>
-      {periodFilterable ? (
-        <nav className="page-actions" aria-label={selectedFilter === "conectadas" ? "Filtrar por data de conexão" : "Filtrar por data de desconexão"}>
-          <span className="muted">{selectedFilter === "conectadas" ? "Conectadas em:" : "Desconectadas em:"}</span>
-          {[["", "Qualquer data"], ...Object.entries(ACTIVITY_PERIODS)].map(([value, label]) => (
-            <Link
-              className={`button button-small ${(selectedPeriod ?? "") === value ? "button-primary" : "button-secondary"}`}
-              href={`/contas?${new URLSearchParams({ ...baseParams, filtro: selectedFilter, ...(value ? { periodo: value } : {}) })}`}
-              key={value}
-            >
-              {label}
-            </Link>
-          ))}
-        </nav>
-      ) : null}
-
       <Panel title="Reconexões por tipo de conexão" description="Contas que começaram a funcionar no período e quantas estão pedindo reconexão agora.">
         <nav className="page-actions reconnect-stats-periods" aria-label="Período das conexões na estatística">
           <span className="muted">Conectadas em:</span>
