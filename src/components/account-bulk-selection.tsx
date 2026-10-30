@@ -3,6 +3,7 @@
 import { useActionState, useRef, useState } from "react";
 import { setAccountsNewStatusAction } from "@/app/actions";
 import { WARMUP_PROFILES, type WarmupProfile } from "@/lib/account-warmup";
+import { CONNECTION_MODES } from "@/lib/account-connection-mode";
 
 async function saveStatus(_previous: null, formData: FormData) {
   await setAccountsNewStatusAction(formData);
@@ -49,6 +50,13 @@ export function AccountBulkSelection({ children, returnTo, total }: {
             </select>
           </label>
           <button className="button button-small button-primary" disabled={pending}>Aplicar perfil</button>
+          <label>Conexão
+            <select name="connectionMode" defaultValue="MANUAL" disabled={pending}>
+              {Object.entries(CONNECTION_MODES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          {/* O botão clicado entra no FormData; a action desvia para o tipo de conexão quando intent=connection. */}
+          <button className="button button-small button-primary" disabled={pending} name="intent" value="connection">Aplicar conexão</button>
           <button className="button button-small button-ghost" type="button" disabled={pending} onClick={() => updateSelection(false)}>Limpar seleção</button>
         </> : null}
       </form>

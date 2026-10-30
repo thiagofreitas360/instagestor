@@ -28,6 +28,12 @@ test("não aplica aquecimento por padrão, muda perfis de 50 contas, combina fil
   await expect(page.getByText("Perfil atualizado em 50 contas", { exact: true })).toBeVisible();
   await expect(page.locator(".new-account-badge")).toHaveCount(50);
   await expect(page.getByRole("button", { name: "Aplicar perfil", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Selecionar todas as 50 contas deste filtro", exact: true }).click();
+  await page.getByRole("combobox", { name: "Conexão", exact: true }).selectOption("AUTO");
+  await page.getByRole("button", { name: "Aplicar conexão", exact: true }).click();
+  await expect(page.getByText("50 contas marcadas como automáticas", { exact: true })).toBeVisible();
+  await expect(page.locator("tbody tr").filter({ hasText: "· Automática" })).toHaveCount(50);
+  await expect(page.getByText("0 contas selecionadas", { exact: true })).toBeVisible();
   for (let attempt = 0; attempt < 2; attempt++) {
     await page.getByRole("button", { name: "Selecionar todas as 50 contas deste filtro", exact: true }).click();
     await page.getByRole("combobox", { name: "Perfil de aquecimento", exact: true }).selectOption("FAST");

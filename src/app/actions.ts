@@ -105,6 +105,8 @@ function safeReturnPath(value: FormDataEntryValue | null, fallback: string) {
 }
 
 export async function setAccountsNewStatusAction(formData: FormData) {
+  // Mesmo formulário da barra de seleção em lote: "Aplicar conexão" marca manual/automática.
+  if (formData.get("intent") === "connection") return setAccountsConnectionModeAction(formData);
   const user = await requireAdmin();
   const returnTo = safeReturnPath(formData.get("returnTo"), "/contas");
   const destination = new URL(returnTo, "http://localhost");
