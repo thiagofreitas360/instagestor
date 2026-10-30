@@ -39,7 +39,9 @@ export function oauthResultFromError(error: unknown): OauthResult {
   return "connection_failed";
 }
 
-export function oauthFallbackUrl(result: OauthResult) {
+/** `accountId` (só no sucesso) deixa /contas perguntar se a conta recém-conectada é manual ou automática. */
+export function oauthFallbackUrl(result: OauthResult, accountId?: string) {
   const key = result === "success" ? "ok" : "erro";
-  return `/contas?${key}=${encodeURIComponent(OAUTH_RESULT_MESSAGES[result])}`;
+  const connected = result === "success" && accountId ? `&conectada=${encodeURIComponent(accountId)}` : "";
+  return `/contas?${key}=${encodeURIComponent(OAUTH_RESULT_MESSAGES[result])}${connected}`;
 }

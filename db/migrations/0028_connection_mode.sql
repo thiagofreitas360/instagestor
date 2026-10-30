@@ -1,0 +1,2 @@
+ALTER TABLE "instagram_accounts" ADD COLUMN "connection_mode" text;--> statement-breakpoint
+ALTER TABLE "instagram_accounts" ADD CONSTRAINT "instagram_accounts_connection_mode_valid" CHECK ("instagram_accounts"."connection_mode" IS NULL OR "instagram_accounts"."connection_mode" IN ('MANUAL', 'AUTO'));

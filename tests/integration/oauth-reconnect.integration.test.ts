@@ -4,7 +4,7 @@ import { getSqlClient } from "@/db/client";
 import { decryptToken } from "@/lib/crypto";
 import { resetEnvForTests } from "@/lib/env";
 import { MetaInstagramProvider } from "@/providers/meta-instagram";
-import { connectFromAuthorizationCode, consumeOauthState, createOauthState } from "@/server/accounts";
+import { connectFromAuthorizationCode, consumeOauthState, createOauthState, setAccountsConnectionMode } from "@/server/accounts";
 import { deleteMetaApp, findAccountMetaAppId, listMetaApps, saveMetaApp } from "@/server/meta-apps";
 import { createAccounts, createOrganization, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
@@ -103,6 +103,37 @@ describe("OAuth com reconexão direcionada", () => {
     await expect(
       connectFromAuthorizationCode("code", await createOauthState(otherOrganization, otherUser)),
     ).rejects.toMatchObject({ result: "account_already_claimed" });
+  });
+});
+
+describe("Tipo de conexão (manual ou automática)", () => {
+  it("nasce sem tipo no OAuth, é classificada depois, auditada e isolada por organização", async () => {
+    const userId = await createUser();
+    const sql = getSqlClient();
+    metaReturns("modo-conexao");
+    const id = await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId));
+    const [created] = await sql<{ connection_mode: string | null }[]>`SELECT connection_mode FROM instagram_accounts WHERE id = ${id}`;
+    expect(created.connection_mode).toBeNull();
+
+    await expect(setAccountsConnectionMode([id], "AUTO", userId, TEST_ORGANIZATION_ID)).resolves.toEqual({ changed: 1, unchanged: 0 });
+    await expect(setAccountsConnectionMode([id], "AUTO", userId, TEST_ORGANIZATION_ID)).resolves.toEqual({ changed: 0, unchanged: 1 });
+    const [classified] = await sql<{ connection_mode: string | null }[]>`SELECT connection_mode FROM instagram_accounts WHERE id = ${id}`;
+    expect(classified.connection_mode).toBe("AUTO");
+    const [auditRow] = await sql<{ metadata_json: { previousMode: string | null; connectionMode: string } }[]>`
+      SELECT metadata_json FROM audit_logs WHERE event_type = 'ACCOUNT_CONNECTION_MODE_UPDATED' AND entity_id = ${id}
+    `;
+    expect(auditRow.metadata_json).toEqual({ previousMode: null, connectionMode: "AUTO" });
+
+    // Reconectar preserva o tipo informado.
+    metaReturns("modo-conexao");
+    await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId, id));
+    const [reconnected] = await sql<{ connection_mode: string | null }[]>`SELECT connection_mode FROM instagram_accounts WHERE id = ${id}`;
+    expect(reconnected.connection_mode).toBe("AUTO");
+
+    const otherOrganization = await createOrganization(randomUUID());
+    const otherUser = await createUser("outro-modo@example.test", otherOrganization);
+    await expect(setAccountsConnectionMode([id], "MANUAL", otherUser, otherOrganization)).rejects.toThrow("pertencem a outro cliente");
+    await expect(setAccountsConnectionMode([id], "INVALIDO" as never, userId, TEST_ORGANIZATION_ID)).rejects.toThrow();
   });
 });
 

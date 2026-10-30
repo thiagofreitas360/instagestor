@@ -71,6 +71,10 @@ O desenho completo está em [QUEUE.md](QUEUE.md).
 
 A migration `0026_account_activity` mantém as datas de início nulas nas contas existentes e define `now()` somente como default para novos inserts. Na leitura, a última autorização serve de referência estimada para os registros legados; períodos sem término conhecido ficam sem duração. Datas, encerramentos e a referência usada no cálculo vêm do relógio do PostgreSQL para evitar diferenças de relógio entre processos.
 
+## Tipo de conexão
+
+`instagram_accounts.connection_mode` (`MANUAL` | `AUTO` | nulo) registra se a conta foi conectada por uma pessoa ou por automação. O OAuth não grava o valor: após a conexão, `/contas` pergunta ao operador e a resposta vai pela action `setAccountsConnectionModeAction` (auditada como `ACCOUNT_CONNECTION_MODE_UPDATED`). Contas antigas e fake ficam nulas ("Não informada") até serem classificadas na página da conta. O campo alimenta o filtro "Tipo de conexão" e a estatística de reconexões por tipo em `/contas` (migration `0028_connection_mode`).
+
 Eventos `ACCOUNT_DISCONNECTED`, `ACCOUNT_BANNED`, `ACCOUNT_DEAUTHORIZED` e `ACCOUNT_UNAVAILABLE` guardam um snapshot `metadata_json.activity` com início, fim, dias completos de 24 horas e indicação de estimativa. A reconexão preserva esses snapshots, e a exclusão de dados limpa os novos campos e metadados. No histórico de banidas, dias de vida desde `created_at` e dias ativos do período são indicadores separados; a média de dias ativos considera somente registros exatos.
 
 ## Índices

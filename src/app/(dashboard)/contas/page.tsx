@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { createFakeAccountsAction, disconnectAccountAction } from "@/app/actions";
+import { createFakeAccountsAction, disconnectAccountAction, setAccountsConnectionModeAction } from "@/app/actions";
 import { getSqlClient } from "@/db/client";
-import { EmptyState, formatDate, MessageBanner, PageHeader, Panel, StatusBadge, initials } from "@/components/ui";
+import { EmptyState, formatDate, MessageBanner, MetricCard, PageHeader, Panel, StatusBadge, initials } from "@/components/ui";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { InstagramConnectButton } from "@/components/instagram-connect-button";
 import { AccountBulkSelection } from "@/components/account-bulk-selection";
@@ -9,6 +9,7 @@ import { AccountWarmupBadge } from "@/components/account-warmup-badge";
 import { AccountActivity } from "@/components/account-activity";
 import { accountActivity, ACTIVITY_PERIODS, activityPeriodRange, type AccountActivityDates, type ActivityPeriod } from "@/lib/account-activity";
 import { accountWarmup, WARMUP_PROFILES, type WarmupProfile } from "@/lib/account-warmup";
+import { CONNECTION_MODES, connectionModeLabel, reconnectStatsByMode, type ConnectionMode } from "@/lib/account-connection-mode";
 import { requireAdmin } from "@/server/auth";
 
 type AccountRow = AccountActivityDates & {
@@ -19,6 +20,7 @@ type AccountRow = AccountActivityDates & {
   account_type: string | null;
   is_new_account: boolean;
   warmup_profile: WarmupProfile | null;
+  connection_mode: ConnectionMode | null;
   created_at: Date;
   status: string;
   token_expires_at: Date | null;
@@ -36,7 +38,7 @@ type AccountRow = AccountActivityDates & {
 type GroupRow = { id: string; name: string };
 
 type PageProps = {
-  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[]; perfil?: string | string[]; vinculo?: string | string[]; periodo?: string | string[] }>;
+  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[]; perfil?: string | string[]; vinculo?: string | string[]; periodo?: string | string[]; conexao?: string | string[]; conectada?: string | string[]; conectadas_em?: string | string[] }>;
 };
 
 function first(value?: string | string[]) {
@@ -50,7 +52,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const [accounts, groups, [setting]] = await Promise.all([
     sql<AccountRow[]>`
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.account_type, account.status,
-        account.token_expires_at, account.is_new_account, account.warmup_profile, account.created_at,
+        account.token_expires_at, account.is_new_account, account.warmup_profile, account.connection_mode, account.created_at,
         account.instagram_user_id, account.authorized_at, account.active_started_at, account.active_ended_at,
         account.active_timing_estimated, account.disconnected_at, account.banned_at,
         now() AS activity_observed_at,
@@ -110,11 +112,21 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const selectedType = requestedType === "novas" || requestedType === "antigas" ? requestedType : "todas";
   const requestedProfile = first(params.perfil);
   const selectedProfile = requestedProfile && (Object.hasOwn(WARMUP_PROFILES, requestedProfile) || requestedProfile === "OFF") ? requestedProfile : "";
+  const requestedMode = first(params.conexao);
+  const selectedMode = requestedMode && (Object.hasOwn(CONNECTION_MODES, requestedMode) || requestedMode === "NAO_INFORMADA") ? requestedMode : "";
+  // Estatística de reconexões: coorte pela data em que a conta começou a funcionar, igual ao filtro "Conectadas em".
+  const requestedStatsPeriod = first(params.conectadas_em);
+  const statsPeriod = requestedStatsPeriod && Object.hasOwn(ACTIVITY_PERIODS, requestedStatsPeriod) ? requestedStatsPeriod as ActivityPeriod : undefined;
+  const reconnectStats = reconnectStatsByMode(accounts, statsPeriod ? activityPeriodRange(statsPeriod, setting.default_timezone) : undefined);
+  // Conta recém-conectada pelo OAuth ainda sem tipo: pergunta manual ou automática.
+  const justConnectedId = first(params.conectada);
+  const justConnected = justConnectedId ? accounts.find((account) => account.id === justConnectedId && !account.connection_mode) : undefined;
   const isNew = (account: AccountRow) => Boolean(accountWarmup(account.warmup_profile, account.created_at)?.active
     || (!account.warmup_profile && account.is_new_account));
   const matchingAccounts = accounts.filter((account) => {
     if (unlinked && account.has_loop) return false;
     if (selectedProfile && (account.warmup_profile ?? "OFF") !== selectedProfile) return false;
+    if (selectedMode && (account.connection_mode ?? "NAO_INFORMADA") !== selectedMode) return false;
     if (selectedNiche && !account.group_ids.includes(selectedNiche)) return false;
     if (normalizedSearch && !account.username.toLocaleLowerCase("pt-BR").includes(normalizedSearch)
       && !account.display_name?.toLocaleLowerCase("pt-BR").includes(normalizedSearch)) return false;
@@ -132,6 +144,8 @@ export default async function AccountsPage({ searchParams }: PageProps) {
     ...(unlinked ? { vinculo: "nao_vinculadas" } : {}),
     ...(selectedType !== "todas" ? { tipo: selectedType } : {}),
     ...(selectedProfile ? { perfil: selectedProfile } : {}),
+    ...(selectedMode ? { conexao: selectedMode } : {}),
+    ...(statsPeriod ? { conectadas_em: statsPeriod } : {}),
     ...(selectedNiche ? { nicho: selectedNiche } : {}), ...(search ? { busca: search } : {}),
   };
   const returnParams = new URLSearchParams({
@@ -152,10 +166,21 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         }
       />
       <MessageBanner error={first(params.erro)} success={first(params.ok)} />
+      {justConnected ? (
+        <Panel title={`Como @${justConnected.username} foi conectada?`} description="Informe se a conexão foi manual ou automática. Isso separa as contas nos filtros e na estatística de reconexões.">
+          <form className="inline-form" action={setAccountsConnectionModeAction}>
+            <input type="hidden" name="accountIds" value={justConnected.id} />
+            <input type="hidden" name="returnTo" value="/contas" />
+            <button className="button button-primary" type="submit" name="connectionMode" value="MANUAL">Manual</button>
+            <button className="button button-secondary" type="submit" name="connectionMode" value="AUTO">Automática</button>
+          </form>
+        </Panel>
+      ) : null}
 
       <form className="analytics-filters" method="get" action="/contas">
         {selectedFilter !== "todas" ? <input type="hidden" name="filtro" value={selectedFilter} /> : null}
         {selectedPeriod ? <input type="hidden" name="periodo" value={selectedPeriod} /> : null}
+        {statsPeriod ? <input type="hidden" name="conectadas_em" value={statsPeriod} /> : null}
         <label>
           Buscar conta
           <input name="busca" type="search" defaultValue={search} placeholder="@usuario ou nome" />
@@ -187,6 +212,14 @@ export default async function AccountsPage({ searchParams }: PageProps) {
             <option value="">Todos os perfis</option>
             {Object.entries(WARMUP_PROFILES).map(([value, profile]) => <option key={value} value={value}>{profile.label}</option>)}
             <option value="OFF">Desativado</option>
+          </select>
+        </label>
+        <label>
+          Tipo de conexão
+          <select name="conexao" defaultValue={selectedMode}>
+            <option value="">Todas</option>
+            {Object.entries(CONNECTION_MODES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            <option value="NAO_INFORMADA">Não informada</option>
           </select>
         </label>
         <button className="button button-secondary" type="submit">Aplicar filtros</button>
@@ -228,6 +261,37 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           ))}
         </nav>
       ) : null}
+
+      <Panel title="Reconexões por tipo de conexão" description="Contas que começaram a funcionar no período e quantas estão pedindo reconexão agora.">
+        <nav className="page-actions reconnect-stats-periods" aria-label="Período das conexões na estatística">
+          <span className="muted">Conectadas em:</span>
+          {[["", "Qualquer data"], ...Object.entries(ACTIVITY_PERIODS)].map(([value, label]) => {
+            const statsParams = new URLSearchParams(returnParams);
+            if (value) statsParams.set("conectadas_em", value); else statsParams.delete("conectadas_em");
+            return (
+              <Link
+                className={`button button-small ${(statsPeriod ?? "") === value ? "button-primary" : "button-secondary"}`}
+                href={`/contas${statsParams.size ? `?${statsParams}` : ""}`}
+                key={value}
+              >
+                {label}
+              </Link>
+            );
+          })}
+        </nav>
+        {/* Cards, não tabela: os testes E2E contam `tbody tr` da lista de contas. */}
+        <div className="reconnect-stats">
+          {[...reconnectStats.rows.map((row) => ({ ...row, label: connectionModeLabel(row.mode) })), { ...reconnectStats.total, label: "Total" }].map((row) => (
+            <MetricCard
+              key={row.label}
+              label={row.label}
+              value={row.percent === null ? "—" : `${row.percent}%`}
+              detail={row.connected ? `${row.reauth} de ${row.connected} pedindo reconexão` : "Nenhuma conta conectada no período"}
+              tone={row.label === "Total" ? "brand" : row.percent ? "warning" : "default"}
+            />
+          ))}
+        </div>
+      </Panel>
 
       {fakeMode ? (
         <Panel className="dev-panel" title="Ambiente de desenvolvimento" description="Crie contas simuladas para testar o fluxo completo sem chamar a Meta.">
@@ -284,6 +348,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                             {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
                             <small>
                               @{account.username}{account.account_type ? ` · ${account.account_type}` : ""}
+                              {account.connection_mode ? ` · ${CONNECTION_MODES[account.connection_mode]}` : ""}
                               {account.meta_app_name ? ` · via ${account.meta_app_name}` : ""}
                             </small>
                           </span>

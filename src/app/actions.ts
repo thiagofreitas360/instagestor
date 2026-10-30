@@ -6,7 +6,7 @@ import { headers } from "next/headers";
 import { z } from "zod";
 import { getSqlClient } from "@/db/client";
 import { authenticate, clearSession, clientAddressFromHeaders, requireAdmin, setSession } from "@/server/auth";
-import { banAccount, createFakeAccounts, disconnectAccount, requestInsightsRefresh, setAccountsNewStatus, unbanAccount, verifyAccount } from "@/server/accounts";
+import { banAccount, createFakeAccounts, disconnectAccount, requestInsightsRefresh, setAccountsConnectionMode, setAccountsNewStatus, unbanAccount, verifyAccount } from "@/server/accounts";
 import { createCampaign, createGroup, deleteGroup, replaceGroupMembers, resolveTargetIds, updateGroup } from "@/server/campaigns";
 import { deleteMetaApp, saveMetaApp } from "@/server/meta-apps";
 import { createLoop, createSchedule, deleteLoop, deleteSchedule, setLoopStatus, updateLoop, updateSchedule } from "@/server/automation";
@@ -136,6 +136,27 @@ export async function setAccountsNewStatusAction(formData: FormData) {
     ? `${count} ${count === 1 ? "conta marcada" : "contas marcadas"} como ${isNewAccount ? (count === 1 ? "nova" : "novas") : (count === 1 ? "antiga" : "antigas")}${result.unchanged ? ` · ${result.unchanged} já estavam nessa classificação` : ""}`
     : "Nenhuma conta precisava ser alterada";
   destination.searchParams.set("ok", text);
+  redirect(`${destination.pathname}${destination.search}`);
+}
+
+export async function setAccountsConnectionModeAction(formData: FormData) {
+  const user = await requireAdmin();
+  const destination = new URL(safeReturnPath(formData.get("returnTo"), "/contas"), "http://localhost");
+  for (const key of ["erro", "ok", "conectada"]) destination.searchParams.delete(key);
+  try {
+    const accountIds = z.array(id).min(1, "Selecione ao menos uma conta").parse(formData.getAll("accountIds"));
+    const mode = formData.get("connectionMode");
+    if (mode !== "MANUAL" && mode !== "AUTO") throw new Error("Escolha manual ou automática");
+    const { changed } = await setAccountsConnectionMode(accountIds, mode, user.id, user.organizationId);
+    revalidatePath("/contas");
+    for (const accountId of new Set(accountIds)) revalidatePath(`/contas/${accountId}`);
+    const label = mode === "MANUAL" ? (changed === 1 ? "manual" : "manuais") : (changed === 1 ? "automática" : "automáticas");
+    destination.searchParams.set("ok", changed
+      ? `${changed} ${changed === 1 ? "conta marcada" : "contas marcadas"} como ${label}`
+      : "Nenhuma conta precisava ser alterada");
+  } catch (error) {
+    destination.searchParams.set("erro", error instanceof Error ? error.message : "Operação não concluída");
+  }
   redirect(`${destination.pathname}${destination.search}`);
 }
 

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { banAccountAction, disconnectAccountAction, refreshInsightsAction, unbanAccountAction, verifyAccountAction } from "@/app/actions";
+import { banAccountAction, disconnectAccountAction, refreshInsightsAction, setAccountsConnectionModeAction, unbanAccountAction, verifyAccountAction } from "@/app/actions";
 import { getSqlClient } from "@/db/client";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import {
@@ -23,6 +23,7 @@ import { AccountWarmupBadge } from "@/components/account-warmup-badge";
 import { accountWarmup, type WarmupProfile } from "@/lib/account-warmup";
 import { AccountActivity } from "@/components/account-activity";
 import { activityDuration, type AccountActivityDates } from "@/lib/account-activity";
+import { CONNECTION_MODES, type ConnectionMode } from "@/lib/account-connection-mode";
 
 type Account = AccountActivityDates & {
   id: string;
@@ -33,6 +34,7 @@ type Account = AccountActivityDates & {
   account_type: string | null;
   is_new_account: boolean;
   warmup_profile: WarmupProfile | null;
+  connection_mode: ConnectionMode | null;
   status: string;
   token_expires_at: Date | null;
   token_last_refreshed_at: Date | null;
@@ -79,7 +81,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
   const [[account], groups, [stats], jobs, [lastPeriod]] = await Promise.all([
     sql<Account[]>`
       SELECT id, instagram_user_id, username, display_name, profile_picture_url, account_type, status, is_new_account, warmup_profile,
-        token_expires_at, token_last_refreshed_at, token_last_checked_at,
+        connection_mode, token_expires_at, token_last_refreshed_at, token_last_checked_at,
         last_successful_api_call_at, last_error_at, last_error_code, last_error_message,
         publishing_limit_usage, publishing_limit_total, publishing_limit_checked_at, created_at,
         authorized_at, active_started_at, active_ended_at, active_timing_estimated, disconnected_at,
@@ -204,6 +206,21 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
         <AccountWarmupForm key={account.warmup_profile ?? "OFF"} accountId={account.id} profile={account.warmup_profile} />
         {warmup?.active ? <p className="account-warmup-copy">Dia {warmup.day} de {warmup.durationDays} · teto da etapa: {warmup.dailyLimit} publicações por 24 horas, respeitando o limite menor do loop.</p> : warmup ? <p className="account-warmup-copy">Aquecimento concluído · ritmo normal.</p> : null}
         {!account.warmup_profile && account.is_new_account ? <AccountNewStatusForm key={String(account.is_new_account)} accountId={account.id} isNewAccount={account.is_new_account} /> : null}
+      </Panel>
+
+      <Panel title="Tipo de conexão" description="Manual ou automática; separa as contas nos filtros e na estatística de reconexões.">
+        <form className="inline-form" action={setAccountsConnectionModeAction}>
+          <input type="hidden" name="accountIds" value={account.id} />
+          <input type="hidden" name="returnTo" value={`/contas/${account.id}`} />
+          <label>
+            Conexão
+            <select name="connectionMode" defaultValue={account.connection_mode ?? ""} required>
+              <option value="" disabled>Não informada</option>
+              {Object.entries(CONNECTION_MODES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          <button className="button button-secondary" type="submit">Salvar</button>
+        </form>
       </Panel>
 
       {account.last_error_message ? (

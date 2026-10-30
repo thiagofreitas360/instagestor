@@ -13,6 +13,7 @@ import { audit } from "./auth";
 import { getMetaAppCredentials } from "./meta-apps";
 import { reschedulePendingLoopJobs } from "./automation";
 import type { WarmupProfile } from "@/lib/account-warmup";
+import type { ConnectionMode } from "@/lib/account-connection-mode";
 import { accountActivitySnapshot } from "./account-activity";
 
 const FAKE_SCOPES = ["instagram_business_basic", "instagram_business_content_publish", INSIGHTS_SCOPE, COMMENTS_SCOPE];
@@ -57,6 +58,31 @@ export async function setAccountsNewStatus(accountIds: string[], isNewAccount: b
       metadata_json: JSON.stringify({ previousValue: account.is_new_account, isNewAccount,
         previousProfile: account.warmup_profile, warmupProfile,
         jobs: jobs.filter((job) => job.accountId === account.id) }),
+    })))}`;
+    return { changed: changed.length, unchanged: ids.length - changed.length };
+  });
+}
+
+export async function setAccountsConnectionMode(accountIds: string[], mode: ConnectionMode, actorUserId: string, organizationId: string) {
+  const ids = [...new Set(z.array(z.uuid()).min(1, "Selecione ao menos uma conta").parse(accountIds))].sort();
+  z.enum(["MANUAL", "AUTO"]).parse(mode);
+  return getSqlClient().begin(async (sql) => {
+    const accounts = await sql<Array<{ id: string; connection_mode: ConnectionMode | null }>>`
+      SELECT id, connection_mode FROM instagram_accounts
+      WHERE organization_id = ${organizationId} AND id = ANY(${ids}::uuid[])
+      ORDER BY id FOR UPDATE
+    `;
+    if (accounts.length !== ids.length) throw new Error("Uma ou mais contas não existem ou pertencem a outro cliente");
+    const changed = accounts.filter((account) => account.connection_mode !== mode);
+    if (!changed.length) return { changed: 0, unchanged: ids.length };
+    await sql`
+      UPDATE instagram_accounts SET connection_mode = ${mode}, updated_at = now()
+      WHERE organization_id = ${organizationId} AND id = ANY(${changed.map((account) => account.id)}::uuid[])
+    `;
+    await sql`INSERT INTO audit_logs ${sql(changed.map((account) => ({
+      organization_id: organizationId, actor_user_id: actorUserId,
+      event_type: "ACCOUNT_CONNECTION_MODE_UPDATED", entity_type: "instagram_account", entity_id: account.id,
+      metadata_json: JSON.stringify({ previousMode: account.connection_mode, connectionMode: mode }),
     })))}`;
     return { changed: changed.length, unchanged: ids.length - changed.length };
   });
