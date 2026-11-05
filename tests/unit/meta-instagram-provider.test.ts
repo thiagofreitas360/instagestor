@@ -142,7 +142,9 @@ describe("MetaInstagramProvider publicação, limite e falhas", () => {
   ] as const)("classifica HTTP %i como %s", async (status, body, kind, code) => {
     fetchMock(jsonResponse(body, status, status === 429 ? { "retry-after": "45" } : undefined));
 
-    await expect(new MetaInstagramProvider().getProfile("token")).rejects.toMatchObject({ kind, code });
+    // A mensagem da Meta vai junto: sem ela "META_100" não diz qual parâmetro ou estado da conta foi recusado.
+    await expect(new MetaInstagramProvider().getProfile("token"))
+      .rejects.toMatchObject({ kind, code, message: expect.stringContaining(body.error.message) });
   });
 
   it("preserva Retry-After em rate limit", async () => {

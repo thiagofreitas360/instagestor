@@ -435,17 +435,19 @@ export class MetaInstagramProvider implements InstagramProvider {
     const meta = body.error;
     const code = `META_${meta?.code ?? response.status}${meta?.error_subcode ? `_${meta.error_subcode}` : ""}`;
     const retryAfter = Number(response.headers.get("retry-after")) || undefined;
+    // O texto da Meta diz o motivo real (conta restrita, campo inexistente...); o código sozinho não.
+    const detail = meta?.message ? `: ${meta.message.slice(0, 300)}` : "";
     if (response.status === 401 || response.status === 403 || meta?.code === 190) {
-      throw new InstagramError("A Meta rejeitou a autorização da conta", "AUTH", code, response.status);
+      throw new InstagramError(`A Meta rejeitou a autorização da conta${detail}`, "AUTH", code, response.status);
     }
     if (response.status === 429 || meta?.code === 4 || meta?.code === 17 || meta?.code === 32) {
-      throw new InstagramError("A Meta aplicou um limite temporário", "RATE_LIMIT", code, response.status, retryAfter);
+      throw new InstagramError(`A Meta aplicou um limite temporário${detail}`, "RATE_LIMIT", code, response.status, retryAfter);
     }
     if (response.status >= 500 || meta?.is_transient) {
-      throw new InstagramError("A Meta está temporariamente indisponível", "TRANSIENT", code, response.status);
+      throw new InstagramError(`A Meta está temporariamente indisponível${detail}`, "TRANSIENT", code, response.status);
     }
     throw new InstagramError(
-      response.status === 400 ? "A Meta rejeitou os dados enviados" : "A Meta rejeitou a requisição",
+      (response.status === 400 ? "A Meta rejeitou os dados enviados" : "A Meta rejeitou a requisição") + detail,
       response.status === 400 ? "VALIDATION" : "PERMANENT",
       code,
       response.status,
