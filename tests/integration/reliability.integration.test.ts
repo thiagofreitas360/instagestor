@@ -5,8 +5,9 @@ import { refreshExpiringTokens } from "@/jobs/token-maintenance";
 import { claimJob, recoverStaleJobs, renewJobLease } from "@/jobs/queue";
 import { encryptToken } from "@/lib/crypto";
 import { resetEnvForTests } from "@/lib/env";
+import { InstagramError } from "@/lib/errors";
 import { getInstagramProvider, resetInstagramProviderForTests } from "@/providers";
-import { verifyAccount } from "@/server/accounts";
+import { verifyAccount, verifyConnectedAccounts } from "@/server/accounts";
 import { cancelCampaign } from "@/server/scheduler";
 import { createAccounts, createCampaign, createJobs, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
@@ -223,5 +224,31 @@ describe("invariantes de confiabilidade", () => {
       WHERE account.id = ${account.id}
     `;
     expect(state).toEqual({ account_status: "CONNECTED", job_status: "QUEUED", campaign_status: "SCHEDULED" });
+  });
+
+  it("verifica todas as contas conectadas e manda para Reconectar só as de token recusado", async () => {
+    const sql = getSqlClient();
+    const [alive, dead, flaky] = await createAccounts(3, "verify_all");
+    for (const [account, kind] of [[alive, "alive"], [dead, "dead"], [flaky, "flaky"]] as const) {
+      await sql`
+        UPDATE instagram_accounts SET encrypted_access_token = ${encryptToken(`fake-token:verify-all:${kind}`)}
+        WHERE id = ${account.id}
+      `;
+    }
+    const provider = getInstagramProvider();
+    provider.getProfile = async (accessToken: string) => {
+      if (accessToken.endsWith(":dead")) throw new InstagramError("App excluído", "AUTH", "META_190", 400);
+      if (accessToken.endsWith(":flaky")) throw new InstagramError("Falha temporária", "TRANSIENT", "META_500", 500);
+      return { id: alive.instagram_user_id, username: alive.username };
+    };
+    provider.getPublishingLimit = async () => ({ usage: 0, total: 100 });
+
+    await expect(verifyConnectedAccounts(TEST_ORGANIZATION_ID)).resolves.toEqual({ ok: 1, reconnect: 1, failed: 1 });
+
+    const rows = await sql<Array<{ id: string; status: string }>>`
+      SELECT id, status FROM instagram_accounts WHERE id IN ${sql([alive.id, dead.id, flaky.id])}
+    `;
+    const status = Object.fromEntries(rows.map((row) => [row.id, row.status]));
+    expect([status[alive.id], status[dead.id], status[flaky.id]]).toEqual(["CONNECTED", "REAUTH_REQUIRED", "CONNECTED"]);
   });
 });

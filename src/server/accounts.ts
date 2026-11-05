@@ -309,6 +309,28 @@ export async function verifyAccount(accountId: string, organizationId: string) {
   }
 }
 
+/** "Verificar agora" em todas as contas conectadas: token recusado pela Meta (ex.: app excluído) vai para Reconectar. */
+export async function verifyConnectedAccounts(organizationId: string) {
+  const accounts = await getSqlClient()<{ id: string }[]>`
+    SELECT id FROM instagram_accounts
+    WHERE organization_id = ${organizationId} AND status IN ('CONNECTED', 'TOKEN_EXPIRING') AND encrypted_access_token IS NOT NULL
+  `;
+  const result = { ok: 0, reconnect: 0, failed: 0 };
+  // ponytail: lotes de 10 dentro da própria requisição; levar para o worker se uma organização passar de algumas centenas de contas.
+  for (let index = 0; index < accounts.length; index += 10) {
+    await Promise.all(accounts.slice(index, index + 10).map(async (account) => {
+      try {
+        await verifyAccount(account.id, organizationId);
+        result.ok++;
+      } catch (error) {
+        if (asInstagramError(error).kind === "AUTH") result.reconnect++;
+        else result.failed++;
+      }
+    }));
+  }
+  return result;
+}
+
 export async function createOauthState(
   organizationId: string,
   actorUserId: string,

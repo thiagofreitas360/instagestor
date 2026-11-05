@@ -6,7 +6,7 @@ import { headers } from "next/headers";
 import { z } from "zod";
 import { getSqlClient } from "@/db/client";
 import { authenticate, clearSession, clientAddressFromHeaders, requireAdmin, setSession } from "@/server/auth";
-import { banAccount, createFakeAccounts, disconnectAccount, requestInsightsRefresh, setAccountsConnectionMode, setAccountsNewStatus, unbanAccount, verifyAccount } from "@/server/accounts";
+import { banAccount, createFakeAccounts, disconnectAccount, requestInsightsRefresh, setAccountsConnectionMode, setAccountsNewStatus, unbanAccount, verifyAccount, verifyConnectedAccounts } from "@/server/accounts";
 import { createCampaign, createGroup, deleteGroup, replaceGroupMembers, resolveTargetIds, updateGroup } from "@/server/campaigns";
 import { deleteMetaApp, saveMetaApp } from "@/server/meta-apps";
 import { createLoop, createSchedule, deleteLoop, deleteSchedule, setLoopStatus, updateLoop, updateSchedule } from "@/server/automation";
@@ -97,6 +97,21 @@ export async function verifyAccountAction(formData: FormData) {
   } catch (error) {
     back(`/contas/${accountId}`, error);
   }
+}
+
+export async function verifyConnectedAccountsAction() {
+  const user = await requireAdmin();
+  let result = { ok: 0, reconnect: 0, failed: 0 };
+  try {
+    result = await verifyConnectedAccounts(user.organizationId);
+    revalidatePath("/contas");
+  } catch (error) {
+    back("/contas", error);
+  }
+  const { ok, reconnect, failed } = result;
+  const summary = `${ok + reconnect + failed} conta(s) verificada(s): ${reconnect} precisam reconectar`
+    + (failed ? `; ${failed} sem resposta da Meta agora, tente de novo mais tarde` : "");
+  redirect(`/contas?${reconnect ? "filtro=reconectar&" : ""}ok=${encodeURIComponent(summary)}`);
 }
 
 function safeReturnPath(value: FormDataEntryValue | null, fallback: string) {

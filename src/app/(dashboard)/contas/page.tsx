@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { createFakeAccountsAction, disconnectAccountAction, setAccountsConnectionModeAction } from "@/app/actions";
+import { createFakeAccountsAction, disconnectAccountAction, setAccountsConnectionModeAction, verifyConnectedAccountsAction } from "@/app/actions";
 import { getSqlClient } from "@/db/client";
 import { EmptyState, formatDate, MessageBanner, MetricCard, PageHeader, Panel, StatusBadge, initials } from "@/components/ui";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
@@ -165,7 +165,12 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         title="Contas do Instagram"
         description={`${connected} de ${accounts.length} contas disponíveis para publicação${needsAttention ? ` · ${needsAttention} precisam de atenção` : ""}.`}
         actions={
-          <InstagramConnectButton>Conectar Instagram</InstagramConnectButton>
+          <>
+            <form action={verifyConnectedAccountsAction}>
+              <button className="button button-secondary" type="submit">Verificar conexões</button>
+            </form>
+            <InstagramConnectButton>Conectar Instagram</InstagramConnectButton>
+          </>
         }
       />
       <MessageBanner error={first(params.erro)} success={first(params.ok)} />
