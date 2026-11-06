@@ -99,11 +99,8 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const customTo = selectedPeriod === "personalizado" ? (first(params.ate) ?? "") : "";
   const periodRange = selectedPeriod === "personalizado" ? customPeriodRange(customFrom, customTo, setting.default_timezone)
     : selectedPeriod ? activityPeriodRange(selectedPeriod, setting.default_timezone) : undefined;
-  // A data é a de conexão; na aba Reconectar, a data em que a conta parou de funcionar.
-  const inPeriod = (account: AccountRow) => {
-    const activity = accountActivity(account);
-    return inDateRange(selectedFilter === "reconectar" ? activity.endedAt : activity.startedAt, periodRange);
-  };
+  // A data é sempre a de conexão, inclusive na aba Reconectar.
+  const inPeriod = (account: AccountRow) => inDateRange(accountActivity(account).startedAt, periodRange);
   const unlinked = first(params.vinculo) === "nao_vinculadas";
   const requestedNiche = first(params.nicho);
   const selectedNiche = groups.some((group) => group.id === requestedNiche) ? requestedNiche : undefined;
@@ -193,7 +190,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           <input name="busca" type="search" defaultValue={search} placeholder="@usuario ou nome" />
         </label>
         <label>
-          {selectedFilter === "reconectar" ? "Desconectadas em" : "Conectadas em"}
+          Conectadas em
           <select name="periodo" defaultValue={selectedPeriod ?? ""}>
             <option value="">Qualquer data</option>
             {Object.entries(ACTIVITY_PERIODS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
