@@ -252,6 +252,10 @@ export async function requestInsightsRefresh(organizationId: string, accountId?:
   return rows.length;
 }
 
+// A verificação só chama /me e content_publishing_limit com campos fixos (versão da API fixa no env): se a Meta
+// recusa (4xx), o token não serve mais — ex.: app excluído responde 400/código 100, não 190. Limite e 5xx não contam.
+const refusedByMeta = (error: unknown) => ["AUTH", "VALIDATION", "PERMANENT"].includes(asInstagramError(error).kind);
+
 export async function verifyAccount(accountId: string, organizationId: string) {
   const [account] = await getSqlClient()<
     Array<{ instagram_user_id: string; encrypted_access_token: string | null; status: string }>
@@ -285,7 +289,7 @@ export async function verifyAccount(accountId: string, organizationId: string) {
     return updated.length > 0;
   } catch (rawError) {
     const error = asInstagramError(rawError);
-    const updated = error.kind === "AUTH"
+    const updated = refusedByMeta(error)
       ? await markAccountUnavailableIfCurrent({
           accountId,
           organizationId,
@@ -323,7 +327,7 @@ export async function verifyConnectedAccounts(organizationId: string) {
         await verifyAccount(account.id, organizationId);
         result.ok++;
       } catch (error) {
-        if (asInstagramError(error).kind === "AUTH") result.reconnect++;
+        if (refusedByMeta(error)) result.reconnect++;
         else result.failed++;
       }
     }));

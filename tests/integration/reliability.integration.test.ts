@@ -228,8 +228,8 @@ describe("invariantes de confiabilidade", () => {
 
   it("verifica todas as contas conectadas e manda para Reconectar só as de token recusado", async () => {
     const sql = getSqlClient();
-    const [alive, dead, flaky] = await createAccounts(3, "verify_all");
-    for (const [account, kind] of [[alive, "alive"], [dead, "dead"], [flaky, "flaky"]] as const) {
+    const [alive, dead, rejected, flaky] = await createAccounts(4, "verify_all");
+    for (const [account, kind] of [[alive, "alive"], [dead, "dead"], [rejected, "rejected"], [flaky, "flaky"]] as const) {
       await sql`
         UPDATE instagram_accounts SET encrypted_access_token = ${encryptToken(`fake-token:verify-all:${kind}`)}
         WHERE id = ${account.id}
@@ -238,17 +238,20 @@ describe("invariantes de confiabilidade", () => {
     const provider = getInstagramProvider();
     provider.getProfile = async (accessToken: string) => {
       if (accessToken.endsWith(":dead")) throw new InstagramError("App excluído", "AUTH", "META_190", 400);
+      // Token de app excluído também volta como 400/código 100 em vez de 190.
+      if (accessToken.endsWith(":rejected")) throw new InstagramError("Recusado", "VALIDATION", "META_100", 400);
       if (accessToken.endsWith(":flaky")) throw new InstagramError("Falha temporária", "TRANSIENT", "META_500", 500);
       return { id: alive.instagram_user_id, username: alive.username };
     };
     provider.getPublishingLimit = async () => ({ usage: 0, total: 100 });
 
-    await expect(verifyConnectedAccounts(TEST_ORGANIZATION_ID)).resolves.toEqual({ ok: 1, reconnect: 1, failed: 1 });
+    await expect(verifyConnectedAccounts(TEST_ORGANIZATION_ID)).resolves.toEqual({ ok: 1, reconnect: 2, failed: 1 });
 
     const rows = await sql<Array<{ id: string; status: string }>>`
-      SELECT id, status FROM instagram_accounts WHERE id IN ${sql([alive.id, dead.id, flaky.id])}
+      SELECT id, status FROM instagram_accounts WHERE id IN ${sql([alive.id, dead.id, rejected.id, flaky.id])}
     `;
     const status = Object.fromEntries(rows.map((row) => [row.id, row.status]));
-    expect([status[alive.id], status[dead.id], status[flaky.id]]).toEqual(["CONNECTED", "REAUTH_REQUIRED", "CONNECTED"]);
+    expect([status[alive.id], status[dead.id], status[rejected.id], status[flaky.id]])
+      .toEqual(["CONNECTED", "REAUTH_REQUIRED", "REAUTH_REQUIRED", "CONNECTED"]);
   });
 });
