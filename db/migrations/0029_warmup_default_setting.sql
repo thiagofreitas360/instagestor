@@ -1,0 +1,4 @@
+ALTER TABLE "instagram_accounts" DROP CONSTRAINT "instagram_accounts_warmup_profile_valid";--> statement-breakpoint
+ALTER TABLE "settings" ADD COLUMN "default_warmup_profile" text;--> statement-breakpoint
+ALTER TABLE "instagram_accounts" ADD CONSTRAINT "instagram_accounts_warmup_profile_valid" CHECK ("instagram_accounts"."warmup_profile" IS NULL OR "instagram_accounts"."warmup_profile" IN ('EXPRESS', 'FAST', 'BALANCED', 'CONSERVATIVE'));--> statement-breakpoint
+ALTER TABLE "settings" ADD CONSTRAINT "settings_default_warmup_profile_valid" CHECK ("settings"."default_warmup_profile" IS NULL OR "settings"."default_warmup_profile" IN ('EXPRESS', 'FAST', 'BALANCED', 'CONSERVATIVE'));

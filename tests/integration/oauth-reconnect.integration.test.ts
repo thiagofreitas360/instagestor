@@ -44,6 +44,21 @@ describe("OAuth com reconexão direcionada", () => {
     expect(again).toMatchObject({ warmup_profile: "CONSERVATIVE", created_at: first.created_at });
   });
 
+  it("applies the settings warmup only to accounts connected after it is chosen", async () => {
+    const userId = await createUser();
+    const sql = getSqlClient();
+    await sql`INSERT INTO settings (organization_id, default_warmup_profile) VALUES (${TEST_ORGANIZATION_ID}, 'EXPRESS')`;
+    metaReturns("warmup-default-1");
+    const first = await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId));
+    await sql`UPDATE settings SET default_warmup_profile = 'BALANCED' WHERE organization_id = ${TEST_ORGANIZATION_ID}`;
+    metaReturns("warmup-default-2");
+    const second = await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId));
+    metaReturns("warmup-default-1");
+    await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId, first));
+    const rows = await sql`SELECT id, warmup_profile FROM instagram_accounts WHERE id IN (${first}, ${second})`;
+    expect(Object.fromEntries(rows.map((row) => [row.id, row.warmup_profile]))).toEqual({ [first]: "EXPRESS", [second]: "BALANCED" });
+  });
+
   it("vincula o state à organização, ao ator e à conta alvo", async () => {
     const userId = await createUser();
     const [account] = await createAccounts(1, "alvo");

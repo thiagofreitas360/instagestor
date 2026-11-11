@@ -130,11 +130,11 @@ export async function setAccountsNewStatusAction(formData: FormData) {
   let result: { changed: number; unchanged: number };
   let accountIds: string[];
   let isNewAccount: boolean;
-  let warmupProfile: "FAST" | "BALANCED" | "CONSERVATIVE" | null = null;
+  let warmupProfile: "EXPRESS" | "FAST" | "BALANCED" | "CONSERVATIVE" | null = null;
   const changingProfile = formData.has("warmupProfile");
   try {
     accountIds = z.array(id).min(1, "Selecione ao menos uma conta").parse(formData.getAll("accountIds"));
-    const selectedProfile = changingProfile ? z.enum(["FAST", "BALANCED", "CONSERVATIVE", "OFF"]).parse(formData.get("warmupProfile")) : "OFF";
+    const selectedProfile = changingProfile ? z.enum(["EXPRESS", "FAST", "BALANCED", "CONSERVATIVE", "OFF"]).parse(formData.get("warmupProfile")) : "OFF";
     warmupProfile = selectedProfile === "OFF" ? null : selectedProfile;
     isNewAccount = changingProfile ? false : z.enum(["true", "false"]).parse(formData.get("isNewAccount")) === "true";
     result = await setAccountsNewStatus(accountIds, isNewAccount, user.id, user.organizationId, warmupProfile);
@@ -748,6 +748,7 @@ export async function saveSettingsAction(formData: FormData) {
         delayMinMinutes: z.coerce.number().int().min(25).max(60),
         delayMaxMinutes: z.coerce.number().int().min(25).max(60),
         theme: z.enum(["LIGHT", "DARK"]),
+        warmupProfile: z.enum(["EXPRESS", "FAST", "BALANCED", "CONSERVATIVE", "OFF"]),
       })
       .parse({
         timezone: formData.get("timezone"),
@@ -755,16 +756,19 @@ export async function saveSettingsAction(formData: FormData) {
         delayMinMinutes: formData.get("delayMinMinutes"),
         delayMaxMinutes: formData.get("delayMaxMinutes"),
         theme: formData.get("theme"),
+        warmupProfile: formData.get("warmupProfile"),
       });
     if (values.delayMaxMinutes < values.delayMinMinutes) throw new Error("Intervalo máximo deve ser maior ou igual ao mínimo");
     const delayMin = values.delayMinMinutes * 60;
     const delayMax = values.delayMaxMinutes * 60;
+    const warmupProfile = values.warmupProfile === "OFF" ? null : values.warmupProfile;
     await getSqlClient()`
-      INSERT INTO settings (organization_id, default_timezone, default_delay_mode, default_delay_min, default_delay_max, theme)
-      VALUES (${user.organizationId}, ${values.timezone}, ${values.delayMode}, ${delayMin}, ${delayMax}, ${values.theme})
+      INSERT INTO settings (organization_id, default_timezone, default_delay_mode, default_delay_min, default_delay_max, theme, default_warmup_profile)
+      VALUES (${user.organizationId}, ${values.timezone}, ${values.delayMode}, ${delayMin}, ${delayMax}, ${values.theme}, ${warmupProfile})
       ON CONFLICT (organization_id) DO UPDATE SET default_timezone = EXCLUDED.default_timezone,
         default_delay_mode = EXCLUDED.default_delay_mode, default_delay_min = EXCLUDED.default_delay_min,
-        default_delay_max = EXCLUDED.default_delay_max, theme = EXCLUDED.theme, updated_at = now()
+        default_delay_max = EXCLUDED.default_delay_max, theme = EXCLUDED.theme,
+        default_warmup_profile = EXCLUDED.default_warmup_profile, updated_at = now()
     `;
     revalidatePath("/configuracoes");
     revalidatePath("/", "layout");

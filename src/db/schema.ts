@@ -174,7 +174,7 @@ export const instagramAccounts = pgTable(
     profilePictureUrl: text("profile_picture_url"),
     accountType: text("account_type"),
     isNewAccount: boolean("is_new_account").notNull().default(false),
-    warmupProfile: text("warmup_profile").$type<"FAST" | "BALANCED" | "CONSERVATIVE">(),
+    warmupProfile: text("warmup_profile").$type<"EXPRESS" | "FAST" | "BALANCED" | "CONSERVATIVE">(),
     connectionMode: text("connection_mode").$type<"MANUAL" | "AUTO">(),
     status: instagramAccountStatus("status").notNull().default("CONNECTED"),
     encryptedAccessToken: text("encrypted_access_token"),
@@ -206,7 +206,7 @@ export const instagramAccounts = pgTable(
   (table) => [
     unique("instagram_accounts_organization_id_unique").on(table.organizationId, table.id),
     check("instagram_accounts_activity_dates_valid", sql`${table.activeEndedAt} IS NULL OR ${table.activeStartedAt} IS NULL OR ${table.activeEndedAt} >= ${table.activeStartedAt}`),
-    check("instagram_accounts_warmup_profile_valid", sql`${table.warmupProfile} IS NULL OR ${table.warmupProfile} IN ('FAST', 'BALANCED', 'CONSERVATIVE')`),
+    check("instagram_accounts_warmup_profile_valid", sql`${table.warmupProfile} IS NULL OR ${table.warmupProfile} IN ('EXPRESS', 'FAST', 'BALANCED', 'CONSERVATIVE')`),
     check("instagram_accounts_connection_mode_valid", sql`${table.connectionMode} IS NULL OR ${table.connectionMode} IN ('MANUAL', 'AUTO')`),
     index("instagram_accounts_organization_status_idx").on(table.organizationId, table.status),
     index("instagram_accounts_organization_username_idx").on(table.organizationId, table.username),
@@ -898,10 +898,13 @@ export const settings = pgTable(
     defaultDelayMin: integer("default_delay_min").notNull().default(1500),
     defaultDelayMax: integer("default_delay_max").notNull().default(3600),
     theme: appTheme("theme").notNull().default("LIGHT"),
+    // Aquecimento aplicado a cada conta conectada pela primeira vez; NULL = sem aquecimento.
+    defaultWarmupProfile: text("default_warmup_profile").$type<"EXPRESS" | "FAST" | "BALANCED" | "CONSERVATIVE">(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     check("settings_delay_valid", sql`${table.defaultDelayMin} >= 0 AND ${table.defaultDelayMax} >= ${table.defaultDelayMin}`),
+    check("settings_default_warmup_profile_valid", sql`${table.defaultWarmupProfile} IS NULL OR ${table.defaultWarmupProfile} IN ('EXPRESS', 'FAST', 'BALANCED', 'CONSERVATIVE')`),
   ],
 );
 

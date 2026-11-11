@@ -7,6 +7,7 @@ const at = (days: number) => new Date(connectedAt.getTime() + days * DAY_MS);
 
 describe("account warmup", () => {
   it.each<[WarmupProfile, number[]]>([
+    ["EXPRESS", [2, 6]],
     ["FAST", [2, 6, 12]],
     ["BALANCED", [2, 2, 4, 4, 8, 8, 12, 12, 16, 16]],
     ["CONSERVATIVE", [2, 2, 2, 2, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12, 16, 16, 16, 16]],

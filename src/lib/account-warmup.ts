@@ -1,4 +1,5 @@
 export const WARMUP_PROFILES = {
+  EXPRESS: { label: "Expresso", steps: [[1, 2], [2, 6]] },
   FAST: { label: "Rápido", steps: [[1, 2], [2, 6], [3, 12]] },
   BALANCED: { label: "Balanceado", steps: [[2, 2], [4, 4], [6, 8], [8, 12], [10, 16]] },
   CONSERVATIVE: { label: "Conservador", steps: [[4, 2], [8, 4], [12, 8], [16, 12], [20, 16]] },

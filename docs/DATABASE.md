@@ -67,7 +67,7 @@ O desenho completo está em [QUEUE.md](QUEUE.md).
 
 ## Atividade das contas
 
-`instagram_accounts.active_started_at` e `active_ended_at` representam o período ativo atual ou o último encerrado. `active_timing_estimated` indica quando a referência foi recuperada de datas legadas, sem histórico completo. Novas conexões OAuth, contas fake e seed gravam períodos exatos; reautorizar uma conta ainda ativa e renovar tokens preserva seu início. Uma reconexão depois de indisponibilidade abre outro período. O aquecimento continua usando a primeira conexão (`created_at`), e `authorized_at` continua protegendo os callbacks OAuth.
+`instagram_accounts.active_started_at` e `active_ended_at` representam o período ativo atual ou o último encerrado. `active_timing_estimated` indica quando a referência foi recuperada de datas legadas, sem histórico completo. Novas conexões OAuth, contas fake e seed gravam períodos exatos; reautorizar uma conta ainda ativa e renovar tokens preserva seu início. Uma reconexão depois de indisponibilidade abre outro período. O aquecimento continua usando a primeira conexão (`created_at`), e `authorized_at` continua protegendo os callbacks OAuth. Contas criadas (OAuth ou fake) recebem `settings.default_warmup_profile` da organização em `warmup_profile`; reconectar não altera o perfil.
 
 A migration `0026_account_activity` mantém as datas de início nulas nas contas existentes e define `now()` somente como default para novos inserts. Na leitura, a última autorização serve de referência estimada para os registros legados; períodos sem término conhecido ficam sem duração. Datas, encerramentos e a referência usada no cálculo vêm do relógio do PostgreSQL para evitar diferenças de relógio entre processos.
 

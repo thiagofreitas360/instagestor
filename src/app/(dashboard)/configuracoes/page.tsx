@@ -2,6 +2,7 @@ import { saveSettingsAction } from "@/app/actions";
 import { getSqlClient } from "@/db/client";
 import { DefinitionList, MessageBanner, PageHeader, Panel } from "@/components/ui";
 import { requireAdmin } from "@/server/auth";
+import { WARMUP_PROFILES, type WarmupProfile } from "@/lib/account-warmup";
 
 type Settings = {
   default_timezone: string;
@@ -9,6 +10,7 @@ type Settings = {
   default_delay_min: number;
   default_delay_max: number;
   theme: "LIGHT" | "DARK";
+  default_warmup_profile: WarmupProfile | null;
   updated_at: Date;
 };
 type PageProps = { searchParams: Promise<{ erro?: string | string[]; ok?: string | string[] }> };
@@ -26,6 +28,7 @@ export default async function SettingsPage({ searchParams }: PageProps) {
     default_delay_min: 1500,
     default_delay_max: 3600,
     theme: "LIGHT" as const,
+    default_warmup_profile: null,
     updated_at: new Date(),
   };
   const provider = process.env.INSTAGRAM_PROVIDER === "meta" ? "Meta Instagram API" : "Provedor simulado";
@@ -80,6 +83,16 @@ export default async function SettingsPage({ searchParams }: PageProps) {
               </label>
             </div>
             <p className="form-hint">O timer inteligente aceita uma faixa de 25 a 60 minutos entre publicações.</p>
+            <label>
+              Aquecimento dos novos perfis
+              <select name="warmupProfile" defaultValue={settings.default_warmup_profile ?? "OFF"}>
+                <option value="OFF">Sem aquecimento</option>
+                {Object.entries(WARMUP_PROFILES).map(([value, profile]) => (
+                  <option key={value} value={value}>{profile.label} · {profile.steps[profile.steps.length - 1][0]} dias</option>
+                ))}
+              </select>
+            </label>
+            <p className="form-hint">Vale para os perfis conectados daqui em diante. Os já conectados mantêm o aquecimento que têm; a etiqueta continua depois que o aquecimento termina.</p>
             <button className="button button-primary" type="submit">Salvar preferências</button>
           </form>
         </Panel>

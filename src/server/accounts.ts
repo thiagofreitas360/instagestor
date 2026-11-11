@@ -22,7 +22,7 @@ type Sql = TransactionSql;
 export async function setAccountsNewStatus(accountIds: string[], isNewAccount: boolean, actorUserId: string, organizationId: string, warmupProfile: WarmupProfile | null = null) {
   const ids = [...new Set(z.array(z.uuid()).min(1, "Selecione ao menos uma conta").parse(accountIds))].sort();
   z.boolean().parse(isNewAccount);
-  z.enum(["FAST", "BALANCED", "CONSERVATIVE"]).nullable().parse(warmupProfile);
+  z.enum(["EXPRESS", "FAST", "BALANCED", "CONSERVATIVE"]).nullable().parse(warmupProfile);
   return getSqlClient().begin(async (sql) => {
     // Mesma ordem da edição de loop: contas antes dos loops, sempre ordenadas por ID.
     const accounts = await sql<Array<{ id: string; is_new_account: boolean; warmup_profile: WarmupProfile | null }>>`
@@ -115,7 +115,11 @@ export async function createFakeAccounts(count: number, actorUserId: string, org
     };
   });
   return getSqlClient().begin(async (sql) => {
-    const created = await sql<{ id: string }[]>`INSERT INTO instagram_accounts ${sql(rows)} RETURNING id`;
+    const [setting] = await sql<{ default_warmup_profile: WarmupProfile | null }[]>`
+      SELECT default_warmup_profile FROM settings WHERE organization_id = ${organizationId}
+    `;
+    const warmup_profile = setting?.default_warmup_profile ?? null;
+    const created = await sql<{ id: string }[]>`INSERT INTO instagram_accounts ${sql(rows.map((row) => ({ ...row, warmup_profile })))} RETURNING id`;
     await sql`
       INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, metadata_json)
       VALUES (${organizationId}, ${actorUserId}, 'ACCOUNT_CONNECTED', 'instagram_account', ${JSON.stringify({ fake: true, count })}::jsonb)
@@ -395,12 +399,13 @@ export async function connectFromAuthorizationCode(code: string, state: string) 
         organization_id, instagram_user_id, app_scoped_user_id, username, display_name, profile_picture_url, account_type,
         status, encrypted_access_token, authorized_at, token_expires_at, token_last_refreshed_at, token_last_checked_at,
         last_successful_api_call_at, disconnected_at, granted_scopes, banned_at, ban_reason, insights_synced_at, meta_app_id,
-        active_started_at, active_timing_estimated
+        active_started_at, active_timing_estimated, warmup_profile
       ) VALUES (
         ${oauth.organization_id}, ${profile.id}, ${profile.appScopedUserId ?? exchanged.appScopedUserId}, ${profile.username},
         ${profile.displayName ?? null}, ${profile.profilePictureUrl ?? null}, ${profile.accountType ?? null},
         'CONNECTED', ${encrypted}, now(), now() + ${exchanged.expiresIn} * interval '1 second', now(), now(), now(), NULL,
-        ${exchanged.permissions}, NULL, NULL, NULL, ${oauth.meta_app_id ?? null}, now(), false
+        ${exchanged.permissions}, NULL, NULL, NULL, ${oauth.meta_app_id ?? null}, now(), false,
+        (SELECT default_warmup_profile FROM settings WHERE organization_id = ${oauth.organization_id})
       )
       ON CONFLICT (instagram_user_id) DO UPDATE SET
         app_scoped_user_id = EXCLUDED.app_scoped_user_id, username = EXCLUDED.username,
