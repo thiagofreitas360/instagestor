@@ -47,6 +47,7 @@ RUN mkdir -p /home/node/.cache/node \
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml next.config.ts tsconfig.json ./
 COPY --chown=node:node --from=dependencies /app/node_modules ./node_modules
 COPY --chown=node:node --from=build /app/.next ./.next
+COPY --chown=node:node --from=build /app/public ./public
 COPY --chown=node:node --from=build /app/src ./src
 COPY --chown=node:node --from=build /app/db ./db
 COPY --chown=node:node --from=build /app/scripts ./scripts

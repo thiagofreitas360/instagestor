@@ -9,6 +9,7 @@ import { authenticate, clearSession, clientAddressFromHeaders, requireAdmin, set
 import { banAccount, createFakeAccounts, disconnectAccount, requestInsightsRefresh, setAccountsConnectionMode, setAccountsNewStatus, unbanAccount, verifyAccount, verifyConnectedAccounts } from "@/server/accounts";
 import { createCampaign, createGroup, deleteGroup, replaceGroupMembers, resolveTargetIds, updateGroup } from "@/server/campaigns";
 import { deleteMetaApp, saveMetaApp } from "@/server/meta-apps";
+import { finishHighlightCheck, requestHighlightCheck } from "@/server/highlight-checker";
 import { createLoop, createSchedule, deleteLoop, deleteSchedule, setLoopStatus, updateLoop, updateSchedule } from "@/server/automation";
 import {
   createMediaFolder,
@@ -112,6 +113,25 @@ export async function verifyConnectedAccountsAction() {
   const summary = `${ok + reconnect + failed} conta(s) verificada(s): ${reconnect} precisam reconectar`
     + (failed ? `; ${failed} sem resposta da Meta agora, tente de novo mais tarde` : "");
   redirect(`/contas?${reconnect ? "filtro=reconectar&" : ""}ok=${encodeURIComponent(summary)}`);
+}
+
+export async function requestHighlightCheckAction() {
+  const user = await requireAdmin();
+  if (!(await requestHighlightCheck(user.organizationId))) {
+    const [checker] = await getSqlClient()<{ has_key: boolean }[]>`
+      SELECT key_hash IS NOT NULL AS has_key FROM highlight_checkers WHERE organization_id = ${user.organizationId}
+    `;
+    if (!checker?.has_key) redirect(`/configuracoes?erro=${encodeURIComponent("Baixe o conferidor de destaques para o seu PC antes de conferir.")}`);
+  }
+  revalidatePath("/contas");
+  redirect("/contas");
+}
+
+export async function cancelHighlightCheckAction() {
+  const user = await requireAdmin();
+  await finishHighlightCheck(user.organizationId, "Conferência cancelada no painel.");
+  revalidatePath("/contas");
+  redirect("/contas");
 }
 
 function safeReturnPath(value: FormDataEntryValue | null, fallback: string) {

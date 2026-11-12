@@ -200,6 +200,10 @@ export const instagramAccounts = pgTable(
     bannedAt: timestamp("banned_at", { withTimezone: true }),
     banReason: text("ban_reason"),
     metaAppId: uuid("meta_app_id").references(() => metaApps.id, { onDelete: "set null" }),
+    // Conferidor de destaques (programa no PC do cliente): NULL = nunca conferida; erro = não deu para conferir.
+    highlightCount: integer("highlight_count"),
+    highlightCheckedAt: timestamp("highlight_checked_at", { withTimezone: true }),
+    highlightCheckError: text("highlight_check_error"),
     ...timestamps,
     disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
   },
@@ -907,6 +911,20 @@ export const settings = pgTable(
     check("settings_default_warmup_profile_valid", sql`${table.defaultWarmupProfile} IS NULL OR ${table.defaultWarmupProfile} IN ('EXPRESS', 'FAST', 'BALANCED', 'CONSERVATIVE')`),
   ],
 );
+
+// Conferidor de destaques de cada organização: chave do programa no PC e a rodada atual.
+// Rodada aberta = run_started_at preenchido e run_finished_at NULL; contas conferidas nela têm highlight_checked_at >= run_started_at.
+export const highlightCheckers = pgTable("highlight_checkers", {
+  organizationId: uuid("organization_id")
+    .primaryKey()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  keyHash: text("key_hash").unique(),
+  seenAt: timestamp("seen_at", { withTimezone: true }),
+  runStartedAt: timestamp("run_started_at", { withTimezone: true }),
+  runFinishedAt: timestamp("run_finished_at", { withTimezone: true }),
+  runTotal: integer("run_total").notNull().default(0),
+  runError: text("run_error"),
+});
 
 export const workerHeartbeats = pgTable("worker_heartbeats", {
   workerId: text("worker_id").primaryKey(),

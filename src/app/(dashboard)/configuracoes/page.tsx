@@ -2,6 +2,7 @@ import { saveSettingsAction } from "@/app/actions";
 import { getSqlClient } from "@/db/client";
 import { DefinitionList, MessageBanner, PageHeader, Panel } from "@/components/ui";
 import { requireAdmin } from "@/server/auth";
+import { highlightCheckStatus } from "@/server/highlight-checker";
 import { WARMUP_PROFILES, type WarmupProfile } from "@/lib/account-warmup";
 
 type Settings = {
@@ -19,9 +20,10 @@ function first(value?: string | string[]) { return Array.isArray(value) ? value[
 export default async function SettingsPage({ searchParams }: PageProps) {
   const user = await requireAdmin();
   const query = await searchParams;
-  const [stored] = await getSqlClient()<Settings[]>`
-    SELECT * FROM settings WHERE organization_id = ${user.organizationId}
-  `;
+  const [[stored], checker] = await Promise.all([
+    getSqlClient()<Settings[]>`SELECT * FROM settings WHERE organization_id = ${user.organizationId}`,
+    highlightCheckStatus(user.organizationId),
+  ]);
   const settings = stored ?? {
     default_timezone: "America/Sao_Paulo",
     default_delay_mode: "RANDOM" as const,
@@ -98,6 +100,34 @@ export default async function SettingsPage({ searchParams }: PageProps) {
         </Panel>
 
         <div className="settings-side-stack">
+          <Panel
+            title="Conferidor de destaques"
+            description={`Programa para o seu computador que confere se as contas conectadas ainda têm destaque. ${
+              !checker?.has_key ? "Ainda não baixado." : checker.online ? "Ligado agora." : "Desligado no momento."}`}
+          >
+            <div className="form-stack">
+              <p className="form-hint">
+                Ele usa o Google Chrome do computador, sem mostrar a janela, logado numa conta de Instagram só para isso (não use uma das contas do painel).
+                Na primeira vez, abre o Chrome para você entrar nessa conta. Depois, deixe a janela do programa aberta (pode minimizar)
+                e use &quot;Conferir destaques&quot; em Contas.
+              </p>
+              <p className="form-hint">
+                Windows: abra o arquivo baixado e, se o Windows avisar, escolha &quot;Executar assim mesmo&quot;.
+                Ubuntu: abra um terminal na pasta do arquivo e rode <code>bash conferidor-destaques.sh</code>.
+              </p>
+              <div className="inline-form">
+                <form method="post" action="/api/conferidor/download">
+                  <input type="hidden" name="sistema" value="windows" />
+                  <button className="button button-secondary" type="submit">Baixar para Windows</button>
+                </form>
+                <form method="post" action="/api/conferidor/download">
+                  <input type="hidden" name="sistema" value="ubuntu" />
+                  <button className="button button-secondary" type="submit">Baixar para Ubuntu</button>
+                </form>
+              </div>
+              {checker?.has_key ? <p className="form-hint">Baixar de novo gera uma chave nova: o arquivo baixado antes para de funcionar.</p> : null}
+            </div>
+          </Panel>
           <Panel title="Ambiente" description="Informações não sensíveis da instalação atual.">
             <DefinitionList items={[
               { label: "Provedor", value: provider },
