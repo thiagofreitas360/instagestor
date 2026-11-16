@@ -190,7 +190,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           <div className="form-stack">
             <AutoRefresh intervalMs={5_000} />
             <div className="quota-cell highlight-check-progress">
-              <span><strong>{highlight.done} de {highlight.run_total}</strong> contas conferidas{highlight.missing ? ` · ${highlight.missing} sem destaque` : ""}</span>
+              <span><strong>{highlight.done} de {highlight.run_total}</strong> contas conferidas{highlight.missing ? ` · ${highlight.missing} sem destaque` : ""}{highlight.failed ? ` · ${highlight.failed} não deu para conferir` : ""}</span>
               <div className="progress-track" aria-label={`${highlightPercent}% das contas conferidas`}>
                 <div className="progress-value" style={{ width: `${highlightPercent}%` }} />
               </div>

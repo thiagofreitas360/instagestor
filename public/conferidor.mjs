@@ -15,8 +15,6 @@ const ARQUIVO_PORTA = join(PERFIL, "DevToolsActivePort");
 const INSTAGRAM = "https://www.instagram.com/";
 const PAUSA_ENTRE_PERFIS_MS = 10_000;
 const ESPERA_SEM_PEDIDO_MS = 30_000;
-// Identificador público do site instagram.com, enviado pelo próprio site ao abrir um perfil.
-const INSTAGRAM_WEB_APP_ID = "936619743392459";
 
 /** Interrompe a rodada inteira: continuar só pioraria (Instagram pedindo pausa, sem login). */
 class Parada extends Error {}
@@ -138,7 +136,7 @@ async function fazerLogin() {
       await dormir(5_000); // o Instagram termina de gravar a sessão
       aba.fechar();
       await fecharNavegador(porta);
-      console.log("Login feito. Esperando pedidos de conferência do InstaGestor...");
+      console.log("Login feito.");
       return;
     } catch {
       console.log("A janela foi fechada antes do login; abrindo de novo...");
@@ -147,35 +145,32 @@ async function fazerLogin() {
   }
 }
 
-/** Mesma consulta que o instagram.com faz ao abrir um perfil; devolve quantos destaques ele tem. */
+// Na página do perfil cada destaque é um link "/stories/highlights/<id>/" (vale com ou sem login, em qualquer idioma).
+const LER_PERFIL = `({ titulo: document.title, endereco: location.pathname,
+  destaques: new Set([...document.querySelectorAll('a[href*="/stories/highlights/"]')].map((link) => link.getAttribute("href"))).size })`;
+
+/**
+ * Abre o perfil como uma pessoa abriria e conta os destaques que aparecem nele. Os destaques carregam
+ * depois do resto da página: "0" só vale depois de 15 s sem nenhum aparecer, com o perfil na tela.
+ */
 async function contarDestaques(aba, username) {
-  const { result, exceptionDetails } = await aba.enviar("Runtime.evaluate", {
-    expression: `fetch("/api/v1/users/web_profile_info/?username=" + encodeURIComponent(${JSON.stringify(username)}),
-      { headers: { "x-ig-app-id": "${INSTAGRAM_WEB_APP_ID}" } })
-      .then(async (resposta) => ({ status: resposta.status, texto: await resposta.text() }))`,
-    awaitPromise: true,
-    returnByValue: true,
-  });
-  if (exceptionDetails) return { erro: "Falha de rede ao abrir o perfil" };
-  const { status, texto } = result.value;
-  if (status === 404) return { erro: "Perfil não encontrado no Instagram" };
-  if ([401, 403, 429].includes(status)) {
-    throw new Parada(`O Instagram pediu uma pausa nas consultas (código ${status}). Tente de novo mais tarde.`);
+  await aba.enviar("Page.navigate", { url: `${INSTAGRAM}${encodeURIComponent(username)}/` });
+  let pagina = { titulo: "", endereco: "", destaques: 0 };
+  for (let segundos = 0; segundos < 15; segundos++) {
+    await dormir(1_000);
+    try {
+      pagina = (await aba.enviar("Runtime.evaluate", { expression: LER_PERFIL, returnByValue: true })).result.value;
+    } catch { continue; } // página ainda trocando
+    if (pagina.destaques > 0) return { destaques: pagina.destaques };
   }
-  let dados;
-  try {
-    dados = JSON.parse(texto);
-  } catch {
-    console.error(`Resposta inesperada do Instagram (${status}): ${texto.slice(0, 200)}`);
+  if (/^\/(accounts\/login|challenge)/.test(pagina.endereco)) {
     throw new SemLogin("O Instagram pediu login ou verificação. Entre de novo na janela que o conferidor abriu no PC.");
   }
-  if (dados?.data?.user === null) return { erro: "Perfil não encontrado no Instagram" };
-  const destaques = dados?.data?.user?.highlight_reel_count;
-  if (!Number.isInteger(destaques)) {
-    console.error(`Resposta sem destaques para @${username} (${status}): ${texto.slice(0, 200)}`);
-    return { erro: "O Instagram não informou os destaques deste perfil" };
+  if (!pagina.titulo.includes(`@${username}`)) {
+    console.error(`   página de @${username}: "${pagina.titulo}" (${pagina.endereco})`);
+    return { erro: "Perfil não apareceu no Instagram (fora do ar, ou a página não carregou)" };
   }
-  return { destaques };
+  return { destaques: 0 };
 }
 
 async function conferir(contas) {
@@ -208,6 +203,8 @@ if (!URL_BASE || !CHAVE) {
 }
 console.log("Conferidor de destaques ligado. Deixe esta janela aberta (pode minimizar).");
 if (!existsSync(PERFIL)) await fazerLogin();
+const ESPERANDO = 'Esperando você clicar em "Conferir destaques" na tela Contas do InstaGestor (a conferência começa em até 30 segundos)...';
+console.log(ESPERANDO);
 for (;;) {
   try {
     const { contas } = await api("GET");
@@ -217,6 +214,8 @@ for (;;) {
     }
     console.log(`Conferindo ${contas.length} conta(s)...`);
     await conferir(contas);
+    console.log("Conferência terminada.");
+    console.log(ESPERANDO);
   } catch (erro) {
     console.error(erro.message);
     if (erro instanceof Parada) await api("POST", { fatal: erro.message }).catch(() => {});
