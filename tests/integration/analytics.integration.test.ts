@@ -37,10 +37,10 @@ describe("loadAnalytics", () => {
     expect(await findAnalyticsAccountIds({ ...scope, search: ` @${a.username.toUpperCase()} ` })).toEqual(ids);
     expect(await findAnalyticsAccountIds({ ...scope, accountId: c.id })).toEqual([]);
     expect(await findAnalyticsAccountIds({ ...scope, accountId: foreign.id })).toEqual([]);
-    const data = await loadAnalytics({ organizationId: TEST_ORGANIZATION_ID, accountIds: ids, period: resolvePeriod(7) });
+    const data = await loadAnalytics({ organizationId: TEST_ORGANIZATION_ID, accountIds: ids, period: resolvePeriod(7, "UTC") });
     expect(data.totals).toMatchObject({ reach: 12, views: 34 });
     expect(data.ranking.map((row) => row.id)).toEqual(ids);
-    const empty = await loadAnalytics({ organizationId: TEST_ORGANIZATION_ID, accountIds: [], period: resolvePeriod(7) });
+    const empty = await loadAnalytics({ organizationId: TEST_ORGANIZATION_ID, accountIds: [], period: resolvePeriod(7, "UTC") });
     expect(empty.totals.reach).toBe(0);
     expect(empty.ranking).toEqual([]);
     expect(empty.media).toEqual([]);
@@ -68,7 +68,7 @@ describe("loadAnalytics", () => {
              ('m3', ${TEST_ORGANIZATION_ID}, ${b.id}, 'IMAGE', 'FEED', now() - interval '40 days', 900, 1)
     `;
 
-    const period = resolvePeriod(7);
+    const period = resolvePeriod(7, "UTC");
     const all = await loadAnalytics({ organizationId: TEST_ORGANIZATION_ID, accountIds: null, period });
     expect(all.totals).toMatchObject({
       followers: 340, netChange: 40, gains: 55, lost: 15, reach: 110, views: 230, likes: 10, mediaCount: 2, mediaByTool: 0,
@@ -98,7 +98,7 @@ describe("loadAnalytics", () => {
     const [noScope, withError] = await createAccounts(2, "flag");
     await sql`UPDATE instagram_accounts SET encrypted_access_token = 'x'`;
     await sql`UPDATE instagram_accounts SET granted_scopes = ARRAY['instagram_business_manage_insights'], insights_error_code = 'META_4' WHERE id = ${withError.id}`;
-    const result = await loadAnalytics({ organizationId: TEST_ORGANIZATION_ID, accountIds: null, period: resolvePeriod(30) });
+    const result = await loadAnalytics({ organizationId: TEST_ORGANIZATION_ID, accountIds: null, period: resolvePeriod(30, "UTC") });
     expect(result.missingScope.map((row) => row.id)).toEqual([noScope.id]);
     expect(result.syncErrors).toEqual([{ id: withError.id, username: withError.username, code: "META_4" }]);
     expect(result.totals.followers).toBe(0);

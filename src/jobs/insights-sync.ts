@@ -1,3 +1,4 @@
+import { DateTime } from "luxon";
 import { getSqlClient } from "@/db/client";
 import { decryptToken } from "@/lib/crypto";
 import { getEnv } from "@/lib/env";
@@ -17,16 +18,14 @@ type ClaimedAccount = {
   instagram_user_id: string;
   encrypted_access_token: string;
   status: string;
+  timezone: string;
 };
 type PendingMedia = { id: string; product_type: MediaProductType };
 
-// ponytail: dia = data UTC; a Meta fecha o dia no fuso dela. Trocar para settings.default_timezone se as bordas incomodarem.
-export function utcDay(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
-
-export function recentDays(now = new Date(), count = 3) {
-  return Array.from({ length: count }, (_, offset) => utcDay(new Date(now.getTime() - offset * DAY_MS)));
+// Dia = data no fuso da organização (settings.default_timezone), virando à meia-noite local.
+export function recentDays(now: Date, timezone: string, count = 3) {
+  const today = DateTime.fromJSDate(now, { zone: timezone }).startOf("day");
+  return Array.from({ length: count }, (_, offset) => today.minus({ days: offset }).toISODate()!);
 }
 
 async function claimAccounts() {
@@ -43,7 +42,8 @@ async function claimAccounts() {
     UPDATE instagram_accounts account SET insights_synced_at = now(), updated_at = now()
     FROM candidates WHERE account.id = candidates.id
     RETURNING account.id, account.organization_id, account.instagram_user_id,
-      account.encrypted_access_token, account.status
+      account.encrypted_access_token, account.status,
+      coalesce((SELECT default_timezone FROM settings WHERE organization_id = account.organization_id), 'America/Sao_Paulo') AS timezone
   `;
 }
 
@@ -129,15 +129,14 @@ async function syncAccount(account: ClaimedAccount, now: Date) {
   const provider = getInstagramProvider();
   const accessToken = decryptToken(account.encrypted_access_token);
   const igUserId = account.instagram_user_id;
-  const today = utcDay(now);
   let calls = 0;
 
   const snapshot = await provider.getAccountSnapshot(accessToken);
   calls++;
-  const days = recentDays(now);
-  const insights = await provider.getAccountInsights(igUserId, accessToken, days);
+  const days = recentDays(now, account.timezone);
+  const insights = await provider.getAccountInsights(igUserId, accessToken, days, account.timezone);
   calls += days.length + 1;
-  await upsertDailyMetrics(account.organization_id, account.id, today, snapshot, insights);
+  await upsertDailyMetrics(account.organization_id, account.id, days[0], snapshot, insights);
 
   const since = new Date(now.getTime() - getEnv().INSIGHTS_MEDIA_WINDOW_DAYS * DAY_MS);
   const [recent, stories] = await Promise.all([

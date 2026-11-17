@@ -14,7 +14,11 @@ import { InstagramConnectButton } from "@/components/instagram-connect-button";
 type Query = Record<string, string | string[] | undefined>;
 type PageProps = { searchParams: Promise<Query> };
 
-const PERIODS: PeriodDays[] = [7, 30, 90];
+// [valor na URL, rótulo, dias, quantos dias atrás termina]
+const PERIODS: ReadonlyArray<readonly [string, string, PeriodDays, number]> = [
+  ["hoje", "Hoje", 1, 0], ["ontem", "Ontem", 1, 1],
+  ["7", "Últimos 7 dias", 7, 0], ["30", "Últimos 30 dias", 30, 0], ["90", "Últimos 90 dias", 90, 0],
+];
 const MEDIA_TYPES = [
   ["", "Todas"], ["REELS", "Reels"], ["FEED", "Posts"], ["STORY", "Stories"],
 ] as const;
@@ -88,7 +92,7 @@ function extraMetric(row: MediaRow) {
 export default async function AnalyticsPage({ searchParams }: PageProps) {
   const user = await requireAdmin();
   const query = await searchParams;
-  const periodDays = PERIODS.find((days) => String(days) === first(query.periodo)) ?? 30;
+  const [periodKey, , periodDays, periodDaysAgo] = PERIODS.find(([value]) => value === first(query.periodo)) ?? PERIODS[3];
   const accountId = z.uuid().safeParse(first(query.conta)).data;
   const groupId = z.uuid().safeParse(first(query.grupo)).data;
   const loopId = z.uuid().safeParse(first(query.loop)).data;
@@ -97,12 +101,12 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
   const rankingOrder: RankingOrder = pick(first(query.ordem), RANKING_ORDERS) ?? "reach";
   const mediaOrder: MediaOrder = pick(first(query.ordem_midia), MEDIA_ORDERS) ?? "views";
   const base = {
-    periodo: String(periodDays), conta: accountId, grupo: groupId, loop: loopId, busca: search || undefined, tipo: mediaType,
+    periodo: periodKey, conta: accountId, grupo: groupId, loop: loopId, busca: search || undefined, tipo: mediaType,
     ordem: rankingOrder === "reach" ? undefined : rankingOrder, ordem_midia: mediaOrder === "views" ? undefined : mediaOrder,
   };
 
   const sql = getSqlClient();
-  const [accounts, groups, loops] = await Promise.all([
+  const [accounts, groups, loops, [setting]] = await Promise.all([
     sql<Array<{ id: string; username: string; display_name: string | null; profile_picture_url: string | null; status: string; biography: string | null; website: string | null; followers_count: number | null; follows_count: number | null; media_count: number | null }>>`
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.status, account.biography, account.website,
         latest.followers_count, latest.follows_count, latest.media_count
@@ -122,6 +126,9 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
     sql<Array<{ id: string; name: string; status: string }>>`
       SELECT id, name, status FROM loops WHERE organization_id = ${user.organizationId} ORDER BY name
     `,
+    sql<Array<{ default_timezone: string }>>`
+      SELECT coalesce((SELECT default_timezone FROM settings WHERE organization_id = ${user.organizationId}), 'America/Sao_Paulo') AS default_timezone
+    `,
   ]);
 
   const requestedAccount = accountId ? accounts.find((account) => account.id === accountId) : undefined;
@@ -138,7 +145,7 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
     : [selectedLoop ? `Loop ${selectedLoop.name}` : "", selectedGroup ? `Grupo ${selectedGroup.name}` : "",
       search ? `Busca: ${search}` : ""].filter(Boolean).join(" · ") || "Todas as contas";
 
-  const period = resolvePeriod(periodDays);
+  const period = resolvePeriod(periodDays, setting.default_timezone, new Date(), periodDaysAgo);
   const data = await loadAnalytics({ organizationId: user.organizationId, accountIds, period, mediaType, rankingOrder, mediaOrder });
   const ago = minutesAgo(data.syncedAt);
   const stale = ago !== null && ago > 180;
@@ -188,8 +195,8 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
         </label>
         <label>
           Período
-          <select name="periodo" defaultValue={String(periodDays)}>
-            {PERIODS.map((days) => <option key={days} value={days}>Últimos {days} dias</option>)}
+          <select name="periodo" defaultValue={periodKey}>
+            {PERIODS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </label>
         <label>

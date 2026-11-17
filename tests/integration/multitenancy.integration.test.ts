@@ -41,7 +41,7 @@ describe("isolamento multitenant", () => {
     const analyticsA = await loadAnalytics({
       organizationId: TEST_ORGANIZATION_ID,
       accountIds: null,
-      period: resolvePeriod(7),
+      period: resolvePeriod(7, "UTC"),
     });
     expect(analyticsA.totals.followers).toBe(100);
     expect(analyticsA.totals.reach).toBe(10);

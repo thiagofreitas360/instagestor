@@ -78,7 +78,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
   const user = await requireAdmin();
   const [{ id }, query] = await Promise.all([params, searchParams]);
   const sql = getSqlClient();
-  const [[account], groups, [stats], jobs, [lastPeriod]] = await Promise.all([
+  const [[account], groups, [stats], jobs, [lastPeriod], [setting]] = await Promise.all([
     sql<Account[]>`
       SELECT id, instagram_user_id, username, display_name, profile_picture_url, account_type, status, is_new_account, warmup_profile,
         connection_mode, token_expires_at, token_last_refreshed_at, token_last_checked_at,
@@ -118,11 +118,14 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
         AND metadata_json->'activity'->>'endedAt' IS NOT NULL
       ORDER BY created_at DESC, id DESC LIMIT 1
     `,
+    sql<Array<{ default_timezone: string }>>`
+      SELECT coalesce((SELECT default_timezone FROM settings WHERE organization_id = ${user.organizationId}), 'America/Sao_Paulo') AS default_timezone
+    `,
   ]);
   if (!account) notFound();
   const warmup = accountWarmup(account.warmup_profile, account.created_at);
 
-  const analytics = await loadAnalytics({ organizationId: user.organizationId, accountIds: [account.id], period: resolvePeriod(30) });
+  const analytics = await loadAnalytics({ organizationId: user.organizationId, accountIds: [account.id], period: resolvePeriod(30, setting.default_timezone) });
   const hasInsightsScope = account.granted_scopes?.includes("instagram_business_manage_insights") ?? false;
   const isBanned = account.status === "BANNED";
 

@@ -21,7 +21,7 @@ async function seedAnalyticsAccount() {
     `;
     const today = new Date();
     for (let offset = 0; offset < 5; offset++) {
-      const day = new Date(today.getTime() - offset * DAY).toISOString().slice(0, 10);
+      const day = new Date(today.getTime() - offset * DAY).toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
       await sql`
         INSERT INTO account_daily_metrics (organization_id, instagram_account_id, day, followers_count, follower_gains, reach, views, likes)
         VALUES (${organization.id}, ${account.id}, ${day}::date, ${1000 - offset * 10}, 12, 300, 900, 40)

@@ -36,7 +36,7 @@ test("combina contas não vinculadas, pesquisa e loops nas análises", async ({ 
     })))}`;
     for (let index = 0; index < accounts.length; index++) {
       await sql`INSERT INTO account_daily_metrics (organization_id, instagram_account_id, day, followers_count, reach, views)
-        VALUES (${organization.id}, ${accounts[index].id}, (now() AT TIME ZONE 'UTC')::date, 1000, ${(index + 1) * 100}, ${(index + 1) * 1000})`;
+        VALUES (${organization.id}, ${accounts[index].id}, (now() AT TIME ZONE 'America/Sao_Paulo')::date, 1000, ${(index + 1) * 100}, ${(index + 1) * 1000})`;
       await sql`INSERT INTO account_media (id, organization_id, instagram_account_id, media_type, product_type, posted_at, views, caption)
         VALUES (${`${prefix}_${index}_media`}, ${organization.id}, ${accounts[index].id}, 'VIDEO', 'REELS', now(), ${(index + 1) * 1000}, ${`${prefix} Reel ${index}`})`;
     }

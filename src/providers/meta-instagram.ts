@@ -1,3 +1,4 @@
+import { DateTime } from "luxon";
 import { InstagramError } from "@/lib/errors";
 import { getEnv } from "@/lib/env";
 import { log } from "@/lib/logger";
@@ -48,9 +49,10 @@ function entryValue(entries: InsightEntry[], name: string) {
   return toInt(entry?.total_value?.value ?? entry?.values?.[0]?.value);
 }
 
-function dayBounds(day: string) {
-  const since = Math.floor(Date.parse(`${day}T00:00:00Z`) / 1000);
-  return { since, until: since + 86_399 };
+/** De 00:00 a 23:59:59 do dia no fuso da organização, em segundos Unix. */
+function dayBounds(day: string, timezone: string) {
+  const start = DateTime.fromISO(day, { zone: timezone }).startOf("day");
+  return { since: start.toSeconds(), until: start.plus({ days: 1 }).toSeconds() - 1 };
 }
 
 function toMediaSummary(item: MetaMedia, productType?: MediaProductType): MediaSummary {
@@ -176,10 +178,10 @@ export class MetaInstagramProvider implements InstagramProvider {
     };
   }
 
-  async getAccountInsights(accountId: string, accessToken: string, days: string[]): Promise<AccountDayInsights[]> {
+  async getAccountInsights(accountId: string, accessToken: string, days: string[], timezone: string): Promise<AccountDayInsights[]> {
     const results: AccountDayInsights[] = [];
     for (const day of days) {
-      const { since, until } = dayBounds(day);
+      const { since, until } = dayBounds(day, timezone);
       const { data = [] } = await this.request<{ data?: InsightEntry[] }>(`/${accountId}/insights`, {
         metric: ACCOUNT_TOTAL_METRICS.join(","), period: "day", metric_type: "total_value",
         since: String(since), until: String(until), access_token: accessToken,
@@ -198,13 +200,13 @@ export class MetaInstagramProvider implements InstagramProvider {
     try {
       const { data = [] } = await this.request<{ data?: InsightEntry[] }>(`/${accountId}/insights`, {
         metric: "follower_count", period: "day", metric_type: "time_series",
-        since: String(dayBounds(sorted[0]).since), until: String(dayBounds(sorted[sorted.length - 1]).until),
+        since: String(dayBounds(sorted[0], timezone).since), until: String(dayBounds(sorted[sorted.length - 1], timezone).until),
         access_token: accessToken,
       });
       for (const point of data.find((entry) => entry.name === "follower_count")?.values ?? []) {
         if (!point.end_time) continue;
-        // end_time marca o fim do bucket; o dia do bucket é o dia UTC desse instante.
-        const day = parseMetaTimestamp(point.end_time).toISOString().slice(0, 10);
+        // end_time marca o fim do bucket; o dia do bucket é o dia desse instante no fuso da organização.
+        const day = DateTime.fromJSDate(parseMetaTimestamp(point.end_time), { zone: timezone }).toISODate();
         const target = results.find((entry) => entry.day === day);
         if (target) target.followerGains = toInt(point.value);
       }

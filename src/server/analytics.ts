@@ -1,21 +1,30 @@
+import { DateTime } from "luxon";
 import { getSqlClient } from "@/db/client";
 import { INSIGHTS_SCOPE } from "@/providers/instagram";
 
 const DAY_MS = 86_400_000;
 
-export type PeriodDays = 7 | 30 | 90;
-export type Period = { days: PeriodDays; from: string; to: string; previousFrom: string; previousTo: string };
+export type PeriodDays = 1 | 7 | 30 | 90;
+export type Period = { days: PeriodDays; timezone: string; from: string; to: string; previousFrom: string; previousTo: string };
 
-function utcDay(date: Date) {
-  return date.toISOString().slice(0, 10);
+/**
+ * Dias no fuso da organização (o mesmo em que o sync grava account_daily_metrics.day).
+ * `daysAgo` recua o fim do período: resolvePeriod(1, tz, now, 1) é "ontem", comparado com anteontem.
+ */
+export function resolvePeriod(days: PeriodDays, timezone: string, now = new Date(), daysAgo = 0): Period {
+  const to = DateTime.fromJSDate(now, { zone: timezone }).startOf("day").minus({ days: daysAgo });
+  const from = to.minus({ days: days - 1 });
+  const previousTo = from.minus({ days: 1 });
+  const previousFrom = previousTo.minus({ days: days - 1 });
+  const iso = (day: DateTime) => day.toISODate()!;
+  return { days, timezone, from: iso(from), to: iso(to), previousFrom: iso(previousFrom), previousTo: iso(previousTo) };
 }
 
-export function resolvePeriod(days: PeriodDays, now = new Date()): Period {
-  const to = new Date(`${utcDay(now)}T00:00:00Z`);
-  const from = new Date(to.getTime() - (days - 1) * DAY_MS);
-  const previousTo = new Date(from.getTime() - DAY_MS);
-  const previousFrom = new Date(previousTo.getTime() - (days - 1) * DAY_MS);
-  return { days, from: utcDay(from), to: utcDay(to), previousFrom: utcDay(previousFrom), previousTo: utcDay(previousTo) };
+/** [00:00 de `from`, 00:00 do dia seguinte a `to`) no fuso, para filtrar timestamps como posted_at. */
+function instantRange(from: string, to: string, timezone: string) {
+  const start = DateTime.fromISO(from, { zone: timezone }).toISO()!;
+  const end = DateTime.fromISO(to, { zone: timezone }).plus({ days: 1 }).toISO()!;
+  return { start, end };
 }
 
 export function deltaPercent(current: number, previous: number) {
@@ -114,8 +123,9 @@ function followerBounds(organizationId: string, ids: string[] | null, from: stri
   `;
 }
 
-async function loadTotals(organizationId: string, ids: string[] | null, from: string, to: string): Promise<Totals> {
+async function loadTotals(organizationId: string, ids: string[] | null, from: string, to: string, timezone: string): Promise<Totals> {
   const sql = getSqlClient();
+  const posted = instantRange(from, to, timezone);
   const [[sums], bounds] = await Promise.all([
     sql<SumsRow[]>`
       WITH scoped AS (
@@ -134,7 +144,7 @@ async function loadTotals(organizationId: string, ids: string[] | null, from: st
         SELECT count(*)::int AS "mediaCount", count(published_job_id)::int AS "mediaByTool"
         FROM account_media am JOIN scoped ON scoped.id = am.instagram_account_id
         WHERE am.organization_id = ${organizationId}
-          AND am.posted_at >= ${from}::date AND am.posted_at < ${to}::date + 1
+          AND am.posted_at >= ${posted.start}::timestamptz AND am.posted_at < ${posted.end}::timestamptz
       )
       SELECT metrics.*, media.* FROM metrics, media
     `,
@@ -153,13 +163,14 @@ export async function loadAnalytics(input: {
 }): Promise<AnalyticsResult> {
   const sql = getSqlClient();
   const ids = input.accountIds;
-  const { from, to, previousFrom, previousTo } = input.period;
+  const { from, to, previousFrom, previousTo, timezone } = input.period;
+  const posted = instantRange(from, to, timezone);
   const rankingOrder: RankingOrder = input.rankingOrder ?? "reach";
   const mediaOrder: MediaOrder = input.mediaOrder ?? "views";
 
   const [totals, previous, series, sums, bounds, media, [state], missingScope, syncErrors] = await Promise.all([
-    loadTotals(input.organizationId, ids, from, to),
-    loadTotals(input.organizationId, ids, previousFrom, previousTo),
+    loadTotals(input.organizationId, ids, from, to, timezone),
+    loadTotals(input.organizationId, ids, previousFrom, previousTo, timezone),
     sql<DailyPoint[]>`
       WITH days AS (
         SELECT generate_series(${from}::date, ${to}::date, interval '1 day')::date AS day
@@ -179,7 +190,7 @@ export async function loadAnalytics(input: {
         coalesce(sum(m.total_interactions), 0)::int AS total_interactions,
         (SELECT count(*)::int FROM account_media am WHERE am.organization_id = ${input.organizationId}
           AND am.instagram_account_id = account.id
-          AND am.posted_at >= ${from}::date AND am.posted_at < ${to}::date + 1) AS media_count
+          AND am.posted_at >= ${posted.start}::timestamptz AND am.posted_at < ${posted.end}::timestamptz) AS media_count
       FROM instagram_accounts account
       LEFT JOIN account_daily_metrics m ON m.organization_id = account.organization_id
         AND m.instagram_account_id = account.id AND m.day BETWEEN ${from}::date AND ${to}::date
@@ -197,7 +208,7 @@ export async function loadAnalytics(input: {
         ON account.organization_id = am.organization_id AND account.id = am.instagram_account_id
       WHERE am.organization_id = ${input.organizationId}
         AND (${ids}::uuid[] IS NULL OR am.instagram_account_id = ANY(${ids}::uuid[]))
-        AND am.posted_at >= ${from}::date AND am.posted_at < ${to}::date + 1
+        AND am.posted_at >= ${posted.start}::timestamptz AND am.posted_at < ${posted.end}::timestamptz
         AND (${input.mediaType ?? null}::text IS NULL OR am.product_type = ${input.mediaType ?? null}::text)
       ORDER BY ${sql(mediaOrder)} DESC NULLS LAST, am.posted_at DESC
       LIMIT 20

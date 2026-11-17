@@ -4,11 +4,20 @@ import { linePath, scaleY } from "@/components/charts";
 import { formatNumber } from "@/components/ui";
 
 describe("resolvePeriod", () => {
-  it("fecha em hoje UTC e calcula o período anterior de mesmo tamanho", () => {
-    const period = resolvePeriod(7, new Date("2026-09-11T22:00:00-03:00"));
+  it("fecha em hoje no fuso da organização e calcula o período anterior de mesmo tamanho", () => {
+    // 22h em Brasília já é dia 12 em UTC, mas ainda é dia 11 aqui.
+    const period = resolvePeriod(7, "America/Sao_Paulo", new Date("2026-09-11T22:00:00-03:00"));
     expect(period).toEqual({
-      days: 7, from: "2026-09-06", to: "2026-09-12", previousFrom: "2026-08-30", previousTo: "2026-09-05",
+      days: 7, timezone: "America/Sao_Paulo", from: "2026-09-05", to: "2026-09-11", previousFrom: "2026-08-29", previousTo: "2026-09-04",
     });
+  });
+
+  it("hoje e ontem são um dia só e viram à meia-noite de Brasília", () => {
+    const tz = "America/Sao_Paulo";
+    const lateNight = new Date("2026-09-11T23:59:00-03:00");
+    expect(resolvePeriod(1, tz, lateNight)).toMatchObject({ from: "2026-09-11", to: "2026-09-11", previousFrom: "2026-09-10", previousTo: "2026-09-10" });
+    expect(resolvePeriod(1, tz, lateNight, 1)).toMatchObject({ from: "2026-09-10", to: "2026-09-10", previousFrom: "2026-09-09", previousTo: "2026-09-09" });
+    expect(resolvePeriod(1, tz, new Date("2026-09-12T00:00:00-03:00"))).toMatchObject({ from: "2026-09-12", to: "2026-09-12" });
   });
 });
 

@@ -78,7 +78,7 @@ describe("getAccountInsights", () => {
         ],
       }] }),
     );
-    const result = await new MetaInstagramProvider().getAccountInsights("178", "token", ["2026-09-11", "2026-09-10"]);
+    const result = await new MetaInstagramProvider().getAccountInsights("178", "token", ["2026-09-11", "2026-09-10"], "America/Sao_Paulo");
     expect(result).toEqual([
       { day: "2026-09-11", followerGains: 9, reach: 10, views: 20, profileViews: 3, accountsEngaged: 4, totalInteractions: 9, likes: 5, comments: 1, shares: 2, saves: 1, replies: 0, websiteClicks: 2, profileLinksTaps: 3 },
       { day: "2026-09-10", followerGains: 7, reach: 11, views: 21, profileViews: 4, accountsEngaged: 5, totalInteractions: 10, likes: 6, comments: 2, shares: 1, saves: 0, replies: 1, websiteClicks: 0, profileLinksTaps: 1 },
@@ -88,13 +88,14 @@ describe("getAccountInsights", () => {
     expect(first.pathname).toBe("/v26.0/178/insights");
     expect(first.searchParams.get("metric_type")).toBe("total_value");
     expect(first.searchParams.get("period")).toBe("day");
-    expect(first.searchParams.get("since")).toBe(String(Date.UTC(2026, 8, 11) / 1000));
-    expect(first.searchParams.get("until")).toBe(String(Date.UTC(2026, 8, 11) / 1000 + 86_399));
+    // Meia-noite de Brasília = 03:00 UTC.
+    expect(first.searchParams.get("since")).toBe(String(Date.UTC(2026, 8, 11, 3) / 1000));
+    expect(first.searchParams.get("until")).toBe(String(Date.UTC(2026, 8, 11, 3) / 1000 + 86_399));
 
     const series = calledUrl(mock, 2);
     expect(series.searchParams.get("metric")).toBe("follower_count");
     expect(series.searchParams.get("metric_type")).toBe("time_series");
-    expect(series.searchParams.get("since")).toBe(String(Date.UTC(2026, 8, 10) / 1000));
+    expect(series.searchParams.get("since")).toBe(String(Date.UTC(2026, 8, 10, 3) / 1000));
   });
 
   it("tolera conta com menos de 100 seguidores deixando follower_gains nulo", async () => {
@@ -102,7 +103,7 @@ describe("getAccountInsights", () => {
       jsonResponse(totalValue({ reach: 1 })),
       jsonResponse({ error: { message: "(#100) Not enough followers", type: "OAuthException", code: 100 } }, 400),
     );
-    const [day] = await new MetaInstagramProvider().getAccountInsights("178", "token", ["2026-09-11"]);
+    const [day] = await new MetaInstagramProvider().getAccountInsights("178", "token", ["2026-09-11"], "America/Sao_Paulo");
     expect(day.followerGains).toBeNull();
     expect(day.reach).toBe(1);
     expect(day.views).toBeNull();
@@ -110,7 +111,7 @@ describe("getAccountInsights", () => {
 
   it("propaga erro de autorização", async () => {
     fetchMock(jsonResponse({ error: { message: "Invalid OAuth access token", code: 190 } }, 401));
-    await expect(new MetaInstagramProvider().getAccountInsights("178", "token", ["2026-09-11"]))
+    await expect(new MetaInstagramProvider().getAccountInsights("178", "token", ["2026-09-11"], "America/Sao_Paulo"))
       .rejects.toMatchObject({ kind: "AUTH" });
   });
 });

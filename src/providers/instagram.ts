@@ -55,7 +55,8 @@ export interface InstagramProvider {
   getPublishingLimit(accountId: string, accessToken: string): Promise<{ usage: number; total: number }>;
   refreshAccessToken(accessToken: string): Promise<{ accessToken: string; expiresIn: number }>;
   getAccountSnapshot(accessToken: string): Promise<AccountSnapshot>;
-  getAccountInsights(accountId: string, accessToken: string, days: string[]): Promise<AccountDayInsights[]>;
+  /** `days` são datas YYYY-MM-DD no `timezone` informado (o fuso da organização). */
+  getAccountInsights(accountId: string, accessToken: string, days: string[], timezone: string): Promise<AccountDayInsights[]>;
   listRecentMedia(accountId: string, accessToken: string, since: Date): Promise<MediaSummary[]>;
   listLiveStories(accountId: string, accessToken: string): Promise<MediaSummary[]>;
   getMediaInsights(mediaId: string, accessToken: string, productType: MediaProductType): Promise<MediaInsights>;
