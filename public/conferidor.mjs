@@ -4,6 +4,7 @@
 // para isso, e conversa com ele pelo protocolo de depuração do Chrome: sem dependências além do Node.
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
 import { delimiter, dirname, join } from "node:path";
 import { setTimeout as dormir } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -201,6 +202,11 @@ if (!URL_BASE || !CHAVE) {
   console.error("Abra o conferidor pelo arquivo baixado em Configurações do InstaGestor.");
   process.exit(1);
 }
+// Uma cópia por computador: duas abertas conferem a mesma lista e disputam o mesmo Chrome.
+await new Promise((pronto) => createServer().once("error", () => {
+  console.error("O conferidor já está aberto em outra janela. Feche as outras janelas do conferidor e abra este arquivo de novo.");
+  process.exit(1);
+}).listen(47_813, "127.0.0.1", pronto));
 console.log("Conferidor de destaques ligado. Deixe esta janela aberta (pode minimizar).");
 if (!existsSync(PERFIL)) await fazerLogin();
 const ESPERANDO = 'Esperando você clicar em "Conferir destaques" na tela Contas do InstaGestor (a conferência começa em até 30 segundos)...';
