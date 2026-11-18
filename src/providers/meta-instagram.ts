@@ -120,7 +120,14 @@ export class MetaInstagramProvider implements InstagramProvider {
       },
     );
     const shortLived = response.data?.[0] ?? (response.access_token && response.user_id ? response : undefined);
-    if (!shortLived?.access_token || !shortLived.user_id) throw new InstagramError("Resposta OAuth incompleta", "AUTH", "OAUTH_RESPONSE_INVALID");
+    if (!shortLived?.access_token || !shortLived.user_id) {
+      // Só nomes e tipos dos campos, nunca valores: a resposta pode trazer token.
+      const shape = (value: unknown) => value && typeof value === "object"
+        ? Object.entries(value).map(([key, item]) => `${key}:${Array.isArray(item) ? `array(${item.length})` : typeof item}`)
+        : typeof value;
+      log("warn", "meta", "oauth_response_invalid", { shape: shape(response), first: shape(response.data?.[0]) });
+      throw new InstagramError("Resposta OAuth incompleta", "AUTH", "OAUTH_RESPONSE_INVALID");
+    }
     const permissions = Array.isArray(shortLived.permissions)
       ? shortLived.permissions
       : (shortLived.permissions ?? "").split(",").map((permission) => permission.trim()).filter(Boolean);

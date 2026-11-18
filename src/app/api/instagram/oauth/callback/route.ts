@@ -16,7 +16,7 @@ export async function GET(request: Request) {
       accountId = await connectFromAuthorizationCode(code, state);
     } catch (error) {
       result = oauthResultFromError(error);
-      log("warn", "oauth", "oauth_callback_failed", { result, errorName: (error as Error).name });
+      log("warn", "oauth", "oauth_callback_failed", { result, errorName: (error as Error).name, errorCode: (error as { code?: string }).code });
     }
   }
   log("info", "oauth", "oauth_finished", { result });
