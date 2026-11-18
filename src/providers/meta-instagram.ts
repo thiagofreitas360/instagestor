@@ -76,6 +76,8 @@ const emptyMediaInsights = (): MediaInsights => ({
   storyTapsForward: null, storyTapsBack: null, storyExits: null,
 });
 
+const REQUESTED_SCOPES = ["instagram_business_basic", "instagram_business_content_publish", INSIGHTS_SCOPE];
+
 export class MetaInstagramProvider implements InstagramProvider {
   private get baseUrl() {
     return `https://graph.instagram.com/${getEnv().META_API_VERSION}`;
@@ -89,7 +91,7 @@ export class MetaInstagramProvider implements InstagramProvider {
       redirect_uri: env.INSTAGRAM_REDIRECT_URI!,
       response_type: "code",
       // Comentários ficam fora do primeiro App Review; auto-comentário falha com COMMENTS_SCOPE_MISSING.
-      scope: `instagram_business_basic,instagram_business_content_publish,${INSIGHTS_SCOPE}`,
+      scope: REQUESTED_SCOPES.join(","),
       state,
       enable_fb_login: "0",
     });
@@ -129,37 +131,28 @@ export class MetaInstagramProvider implements InstagramProvider {
       return new InstagramError("Resposta OAuth incompleta", "AUTH", "OAUTH_RESPONSE_INVALID");
     };
     if (!shortLived?.access_token) throw invalid();
-    const permissions = Array.isArray(shortLived.permissions)
+    const reported = Array.isArray(shortLived.permissions)
       ? shortLived.permissions
       : (shortLived.permissions ?? "").split(",").map((permission) => permission.trim()).filter(Boolean);
+    // Para algumas contas a Meta devolve um token que funciona, mas com user_id null e permissions [] (visto em
+    // produção, mesmo com tudo aceito na tela). Aí ela não informou nada: não dá para tratar como recusa.
+    // ponytail: assume os escopos pedidos; se o usuário desligou publicação na tela, a falha só aparece ao publicar.
+    const unreported = !shortLived.user_id && reported.length === 0;
+    if (unreported) log("warn", "meta", "oauth_permissions_unreported");
+    const permissions = unreported ? REQUESTED_SCOPES : reported;
     const requiredPermissions = ["instagram_business_basic", "instagram_business_content_publish"];
-    // Antes do user_id: sem permissão nenhuma a Meta devolve 200 com user_id null e permissions [] (visto em produção).
     const exchangeUrl = new URL("https://graph.instagram.com/access_token");
     exchangeUrl.search = new URLSearchParams({
       grant_type: "ig_exchange_token",
       client_secret: app.appSecret,
       access_token: shortLived.access_token,
     }).toString();
-    const exchangeLongLived = () => this.fetchJson<{ access_token: string; expires_in: number }>(exchangeUrl.toString(), { method: "GET" });
     if (!requiredPermissions.every((permission) => permissions.includes(permission))) {
-      if (!shortLived.user_id) {
-        // Diagnóstico temporário: o token "vazio" serve para alguma coisa? Só registra; a conexão continua recusada.
-        try {
-          const probe = await exchangeLongLived();
-          const me = await this.request<{ user_id?: string; account_type?: string }>(
-            "/me", { fields: "user_id,account_type", access_token: probe.access_token },
-          );
-          log("warn", "meta", "oauth_empty_grant_probe", { step: "ok", hasUserId: Boolean(me.user_id), accountType: me.account_type });
-        } catch (error) {
-          const failure = error as InstagramError;
-          log("warn", "meta", "oauth_empty_grant_probe", { step: "failed", errorCode: failure.code, detail: failure.message });
-        }
-      }
       throw new InstagramError("Permissões obrigatórias não foram concedidas", "AUTH", "OAUTH_PERMISSIONS_MISSING");
     }
-    if (!shortLived.user_id) throw invalid();
-    const longLived = await exchangeLongLived();
-    return { appScopedUserId: shortLived.user_id, accessToken: longLived.access_token, expiresIn: longLived.expires_in, permissions };
+    if (!shortLived.user_id && !unreported) throw invalid();
+    const longLived = await this.fetchJson<{ access_token: string; expires_in: number }>(exchangeUrl.toString(), { method: "GET" });
+    return { appScopedUserId: shortLived.user_id ?? null, accessToken: longLived.access_token, expiresIn: longLived.expires_in, permissions };
   }
 
   async getProfile(accessToken: string): Promise<InstagramProfile> {
