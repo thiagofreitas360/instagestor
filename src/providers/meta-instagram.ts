@@ -119,29 +119,46 @@ export class MetaInstagramProvider implements InstagramProvider {
         body,
       },
     );
-    const shortLived = response.data?.[0] ?? (response.access_token && response.user_id ? response : undefined);
-    if (!shortLived?.access_token || !shortLived.user_id) {
+    const shortLived = response.data?.[0] ?? (response.access_token ? response : undefined);
+    const invalid = () => {
       // Só nomes e tipos dos campos, nunca valores: a resposta pode trazer token.
       const shape = (value: unknown) => value && typeof value === "object"
         ? Object.entries(value).map(([key, item]) => `${key}:${Array.isArray(item) ? `array(${item.length})` : typeof item}`)
         : typeof value;
       log("warn", "meta", "oauth_response_invalid", { shape: shape(response), first: shape(response.data?.[0]) });
-      throw new InstagramError("Resposta OAuth incompleta", "AUTH", "OAUTH_RESPONSE_INVALID");
-    }
+      return new InstagramError("Resposta OAuth incompleta", "AUTH", "OAUTH_RESPONSE_INVALID");
+    };
+    if (!shortLived?.access_token) throw invalid();
     const permissions = Array.isArray(shortLived.permissions)
       ? shortLived.permissions
       : (shortLived.permissions ?? "").split(",").map((permission) => permission.trim()).filter(Boolean);
     const requiredPermissions = ["instagram_business_basic", "instagram_business_content_publish"];
-    if (!requiredPermissions.every((permission) => permissions.includes(permission))) {
-      throw new InstagramError("Permissões obrigatórias não foram concedidas", "AUTH", "OAUTH_PERMISSIONS_MISSING");
-    }
+    // Antes do user_id: sem permissão nenhuma a Meta devolve 200 com user_id null e permissions [] (visto em produção).
     const exchangeUrl = new URL("https://graph.instagram.com/access_token");
     exchangeUrl.search = new URLSearchParams({
       grant_type: "ig_exchange_token",
       client_secret: app.appSecret,
       access_token: shortLived.access_token,
     }).toString();
-    const longLived = await this.fetchJson<{ access_token: string; expires_in: number }>(exchangeUrl.toString(), { method: "GET" });
+    const exchangeLongLived = () => this.fetchJson<{ access_token: string; expires_in: number }>(exchangeUrl.toString(), { method: "GET" });
+    if (!requiredPermissions.every((permission) => permissions.includes(permission))) {
+      if (!shortLived.user_id) {
+        // Diagnóstico temporário: o token "vazio" serve para alguma coisa? Só registra; a conexão continua recusada.
+        try {
+          const probe = await exchangeLongLived();
+          const me = await this.request<{ user_id?: string; account_type?: string }>(
+            "/me", { fields: "user_id,account_type", access_token: probe.access_token },
+          );
+          log("warn", "meta", "oauth_empty_grant_probe", { step: "ok", hasUserId: Boolean(me.user_id), accountType: me.account_type });
+        } catch (error) {
+          const failure = error as InstagramError;
+          log("warn", "meta", "oauth_empty_grant_probe", { step: "failed", errorCode: failure.code, detail: failure.message });
+        }
+      }
+      throw new InstagramError("Permissões obrigatórias não foram concedidas", "AUTH", "OAUTH_PERMISSIONS_MISSING");
+    }
+    if (!shortLived.user_id) throw invalid();
+    const longLived = await exchangeLongLived();
     return { appScopedUserId: shortLived.user_id, accessToken: longLived.access_token, expiresIn: longLived.expires_in, permissions };
   }
 

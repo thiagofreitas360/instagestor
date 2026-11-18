@@ -100,6 +100,13 @@ describe("MetaInstagramProvider OAuth e ciclo do token", () => {
       .rejects.toMatchObject({ kind: "AUTH", code: "OAUTH_PERMISSIONS_MISSING" });
   });
 
+  it("trata token sem user_id e sem permissões como permissões não concedidas", async () => {
+    fetchMock(jsonResponse({ access_token: "curto", user_id: null, permissions: [] }));
+
+    await expect(new MetaInstagramProvider().exchangeAuthorizationCode("codigo-sem-permissoes"))
+      .rejects.toMatchObject({ kind: "AUTH", code: "OAUTH_PERMISSIONS_MISSING" });
+  });
+
   it("renova token longo pelo endpoint correto e retorna a validade informada", async () => {
     const mockedFetch = fetchMock(jsonResponse({ access_token: "token-renovado", expires_in: 5_000_000 }));
 
