@@ -6,7 +6,7 @@ import { accountActivity, type AccountActivityDates } from "@/lib/account-activi
 import { encryptToken } from "@/lib/crypto";
 import { resetEnvForTests } from "@/lib/env";
 import { getInstagramProvider, MetaInstagramProvider } from "@/providers";
-import { banAccount, connectFromAuthorizationCode, createOauthState, disconnectAccount, unbanAccount, verifyAccount } from "@/server/accounts";
+import { banAccount, connectFromAuthorizationCode, createOauthState, disconnectAccount, hideReauthAccounts, unbanAccount, verifyAccount } from "@/server/accounts";
 import { loadBanHistory } from "@/server/analytics";
 import { createAccounts, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
@@ -54,6 +54,21 @@ describe("períodos de atividade", () => {
     expect(history.avgActiveDays).toBe(7);
     await unbanAccount(account.id, actor, TEST_ORGANIZATION_ID);
     expect(accountActivity(await activityRow(account.id)).days).toBe(7);
+  });
+
+  it("oculta só as contas que pedem reconexão e reconectar traz de volta", async () => {
+    const sql = getSqlClient();
+    const actor = await createUser();
+    mockOAuth("hide-reauth");
+    const reauth = await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, actor));
+    const [connected] = await createAccounts(1, "hide-connected");
+    await sql`UPDATE instagram_accounts SET status = 'REAUTH_REQUIRED' WHERE id = ${reauth}`;
+    expect(await hideReauthAccounts(TEST_ORGANIZATION_ID)).toBe(1);
+    const hidden = async () => (await sql<{ id: string }[]>`
+      SELECT id FROM instagram_accounts WHERE id IN (${reauth}, ${connected.id}) AND hidden_at IS NOT NULL`).map((row) => row.id);
+    expect(await hidden()).toEqual([reauth]);
+    await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, actor, reauth));
+    expect(await hidden()).toEqual([]);
   });
 
   it("preserva atividade na reautorização e abre outro período após reconectar", async () => {

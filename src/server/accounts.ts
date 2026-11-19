@@ -190,6 +190,15 @@ export async function disconnectAccount(accountId: string, actorUserId: string, 
   });
 }
 
+/** Tira da lista de Contas as que pedem reconexão. Status, token e histórico não mudam; reconectar traz de volta. */
+export async function hideReauthAccounts(organizationId: string) {
+  const hidden = await getSqlClient()`
+    UPDATE instagram_accounts SET hidden_at = now(), updated_at = now()
+    WHERE organization_id = ${organizationId} AND status = 'REAUTH_REQUIRED' AND hidden_at IS NULL
+  `;
+  return hidden.count;
+}
+
 export async function banAccount(accountId: string, reason: string, actorUserId: string, organizationId: string) {
   const trimmed = reason.trim();
   if (trimmed.length < 3 || trimmed.length > 500) throw new Error("Informe um motivo entre 3 e 500 caracteres");
@@ -418,7 +427,7 @@ export async function connectFromAuthorizationCode(code: string, state: string) 
         active_ended_at = NULL,
         encrypted_access_token = EXCLUDED.encrypted_access_token, token_expires_at = EXCLUDED.token_expires_at,
         authorized_at = now(), token_last_refreshed_at = now(), token_last_checked_at = now(), last_successful_api_call_at = now(),
-        disconnected_at = NULL, granted_scopes = EXCLUDED.granted_scopes, banned_at = NULL, ban_reason = NULL,
+        disconnected_at = NULL, hidden_at = NULL, granted_scopes = EXCLUDED.granted_scopes, banned_at = NULL, ban_reason = NULL,
         insights_synced_at = NULL, meta_app_id = EXCLUDED.meta_app_id, updated_at = now()
       WHERE instagram_accounts.organization_id = EXCLUDED.organization_id
       RETURNING id, (xmax = 0) AS inserted

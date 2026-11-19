@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { cancelHighlightCheckAction, createFakeAccountsAction, disconnectAccountAction, requestHighlightCheckAction, setAccountsConnectionModeAction, verifyConnectedAccountsAction } from "@/app/actions";
+import { cancelHighlightCheckAction, createFakeAccountsAction, disconnectAccountAction, hideReauthAccountsAction, requestHighlightCheckAction, setAccountsConnectionModeAction, verifyConnectedAccountsAction } from "@/app/actions";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { highlightCheckStatus } from "@/server/highlight-checker";
 import { getSqlClient } from "@/db/client";
@@ -39,11 +39,12 @@ type AccountRow = AccountActivityDates & {
   highlight_count: number | null;
   highlight_checked_at: Date | null;
   highlight_check_error: string | null;
+  hidden_at: Date | null;
 };
 type GroupRow = { id: string; name: string };
 
 type PageProps = {
-  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[]; perfil?: string | string[]; vinculo?: string | string[]; periodo?: string | string[]; de?: string | string[]; ate?: string | string[]; conexao?: string | string[]; conectada?: string | string[]; conectadas_em?: string | string[] }>;
+  searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[]; perfil?: string | string[]; vinculo?: string | string[]; periodo?: string | string[]; de?: string | string[]; ate?: string | string[]; conexao?: string | string[]; conectada?: string | string[]; conectadas_em?: string | string[]; conectadas_de?: string | string[]; conectadas_ate?: string | string[] }>;
 };
 
 function first(value?: string | string[]) {
@@ -54,7 +55,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const user = await requireAdmin();
   const params = await searchParams;
   const sql = getSqlClient();
-  const [accounts, groups, [setting], highlight] = await Promise.all([
+  const [allAccounts, groups, [setting], highlight] = await Promise.all([
     sql<AccountRow[]>`
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.account_type, account.status,
         account.token_expires_at, account.is_new_account, account.warmup_profile, account.connection_mode, account.created_at,
@@ -64,7 +65,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         EXISTS (SELECT 1 FROM loop_accounts linked WHERE linked.organization_id = account.organization_id
           AND linked.instagram_account_id = account.id) AS has_loop,
         account.last_error_at, account.last_error_message,
-        account.highlight_count, account.highlight_checked_at, account.highlight_check_error,
+        account.highlight_count, account.highlight_checked_at, account.highlight_check_error, account.hidden_at,
         account.publishing_limit_usage, account.publishing_limit_total,
         coalesce(array_agg(DISTINCT group_row.name ORDER BY group_row.name)
           FILTER (WHERE group_row.name IS NOT NULL), '{}') AS group_names,
@@ -93,11 +94,14 @@ export default async function AccountsPage({ searchParams }: PageProps) {
     `,
     highlightCheckStatus(user.organizationId),
   ]);
+  // Ocultadas pelo botão somem da página, mas continuam na estatística de reconexões.
+  const accounts = allAccounts.filter((account) => !(account.status === "REAUTH_REQUIRED" && account.hidden_at));
   const highlightPercent = highlight?.run_total ? Math.min(100, Math.round((highlight.done / highlight.run_total) * 100)) : 0;
   const fakeMode = process.env.INSTAGRAM_PROVIDER === "fake"
     && (process.env.NODE_ENV !== "production" || process.env.ALLOW_FAKE_PROVIDER_IN_PRODUCTION === "true");
   const connected = accounts.filter((account) => ["CONNECTED", "TOKEN_EXPIRING"].includes(account.status)).length;
   const needsAttention = accounts.filter((account) => ["REAUTH_REQUIRED", "ERROR"].includes(account.status)).length;
+  const reauthCount = accounts.filter((account) => account.status === "REAUTH_REQUIRED").length;
   const selectedFilter = first(params.filtro) ?? "todas";
   // Filtro por data em qualquer aba: presets ou intervalo personalizado (de/até, só quando periodo=personalizado).
   const requestedPeriod = first(params.periodo);
@@ -122,8 +126,12 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const selectedMode = requestedMode && (Object.hasOwn(CONNECTION_MODES, requestedMode) || requestedMode === "NAO_INFORMADA") ? requestedMode : "";
   // Estatística de reconexões: coorte pela data em que a conta começou a funcionar, igual ao filtro "Conectadas em".
   const requestedStatsPeriod = first(params.conectadas_em);
-  const statsPeriod = requestedStatsPeriod && Object.hasOwn(ACTIVITY_PERIODS, requestedStatsPeriod) ? requestedStatsPeriod as ActivityPeriod : undefined;
-  const reconnectStats = reconnectStatsByMode(accounts, statsPeriod ? activityPeriodRange(statsPeriod, setting.default_timezone) : undefined);
+  const statsPeriod = requestedStatsPeriod && (Object.hasOwn(ACTIVITY_PERIODS, requestedStatsPeriod) || requestedStatsPeriod === "personalizado")
+    ? requestedStatsPeriod as ActivityPeriod | "personalizado" : undefined;
+  const statsFrom = statsPeriod === "personalizado" ? (first(params.conectadas_de) ?? "") : "";
+  const statsTo = statsPeriod === "personalizado" ? (first(params.conectadas_ate) ?? "") : "";
+  const reconnectStats = reconnectStatsByMode(allAccounts, statsPeriod === "personalizado" ? customPeriodRange(statsFrom, statsTo, setting.default_timezone)
+    : statsPeriod ? activityPeriodRange(statsPeriod, setting.default_timezone) : undefined);
   // Conta recém-conectada pelo OAuth ainda sem tipo: pergunta manual ou automática.
   const justConnectedId = first(params.conectada);
   const justConnected = justConnectedId ? accounts.find((account) => account.id === justConnectedId && !account.connection_mode) : undefined;
@@ -154,6 +162,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
     ...(selectedProfile ? { perfil: selectedProfile } : {}),
     ...(selectedMode ? { conexao: selectedMode } : {}),
     ...(statsPeriod ? { conectadas_em: statsPeriod } : {}),
+    ...(statsFrom ? { conectadas_de: statsFrom } : {}), ...(statsTo ? { conectadas_ate: statsTo } : {}),
     ...(selectedPeriod ? { periodo: selectedPeriod } : {}),
     ...(customFrom ? { de: customFrom } : {}), ...(customTo ? { ate: customTo } : {}),
     ...(selectedNiche ? { nicho: selectedNiche } : {}), ...(search ? { busca: search } : {}),
@@ -180,6 +189,13 @@ export default async function AccountsPage({ searchParams }: PageProps) {
                 <button className="button button-secondary" type="submit">Conferir destaques</button>
               </form>
             )}
+            {reauthCount ? (
+              <form action={hideReauthAccountsAction}>
+                <ConfirmSubmitButton className="button button-danger" message={`Tem certeza? As ${reauthCount} conta(s) que estão pedindo reconexão vão sair da lista. As contas conectadas não mudam. Se reconectar uma delas pelo "Conectar Instagram", ela volta a aparecer.`}>
+                  Tirar da lista {reauthCount} pedindo reconexão
+                </ConfirmSubmitButton>
+              </form>
+            ) : null}
             <InstagramConnectButton>Conectar Instagram</InstagramConnectButton>
           </>
         }
@@ -229,6 +245,8 @@ export default async function AccountsPage({ searchParams }: PageProps) {
       <form className="analytics-filters" method="get" action="/contas">
         {selectedFilter !== "todas" ? <input type="hidden" name="filtro" value={selectedFilter} /> : null}
         {statsPeriod ? <input type="hidden" name="conectadas_em" value={statsPeriod} /> : null}
+        {statsFrom ? <input type="hidden" name="conectadas_de" value={statsFrom} /> : null}
+        {statsTo ? <input type="hidden" name="conectadas_ate" value={statsTo} /> : null}
         <label>
           Buscar conta
           <input name="busca" type="search" defaultValue={search} placeholder="@usuario ou nome" />
@@ -319,6 +337,8 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           <span className="muted">Conectadas em:</span>
           {[["", "Qualquer data"], ...Object.entries(ACTIVITY_PERIODS)].map(([value, label]) => {
             const statsParams = new URLSearchParams(returnParams);
+            statsParams.delete("conectadas_de");
+            statsParams.delete("conectadas_ate");
             if (value) statsParams.set("conectadas_em", value); else statsParams.delete("conectadas_em");
             return (
               <Link
@@ -330,6 +350,18 @@ export default async function AccountsPage({ searchParams }: PageProps) {
               </Link>
             );
           })}
+          {/* Dia único: mesma data em De e Até. */}
+          <form method="get" action="/contas">
+            {[...returnParams].filter(([key]) => !key.startsWith("conectadas_")).map(([key, value]) => (
+              <input key={key} type="hidden" name={key} value={value} />
+            ))}
+            <input type="hidden" name="conectadas_em" value="personalizado" />
+            <input name="conectadas_de" type="date" aria-label="Conectadas de" defaultValue={statsFrom} />
+            <input name="conectadas_ate" type="date" aria-label="Conectadas até" defaultValue={statsTo} />
+            <button className={`button button-small ${statsPeriod === "personalizado" ? "button-primary" : "button-secondary"}`} type="submit">
+              Personalizado
+            </button>
+          </form>
         </nav>
         {/* Cards, não tabela: os testes E2E contam `tbody tr` da lista de contas. */}
         <div className="reconnect-stats">

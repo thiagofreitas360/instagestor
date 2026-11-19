@@ -1,0 +1,1 @@
+ALTER TABLE "instagram_accounts" ADD COLUMN "hidden_at" timestamp with time zone;

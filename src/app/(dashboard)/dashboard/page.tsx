@@ -80,7 +80,8 @@ export default async function DashboardPage() {
         (SELECT count(*)::int FROM instagram_accounts WHERE organization_id = ${user.organizationId}
           AND status IN ('CONNECTED', 'TOKEN_EXPIRING')) AS accounts_available,
         (SELECT count(*)::int FROM instagram_accounts WHERE organization_id = ${user.organizationId}
-          AND status IN ('REAUTH_REQUIRED', 'ERROR', 'DISABLED')) AS accounts_problem,
+          AND status IN ('REAUTH_REQUIRED', 'ERROR', 'DISABLED')
+          AND NOT (status = 'REAUTH_REQUIRED' AND hidden_at IS NOT NULL)) AS accounts_problem,
         (SELECT count(*)::int FROM campaigns WHERE organization_id = ${user.organizationId}
           AND origin = 'MANUAL' AND status IN ('SCHEDULED', 'RUNNING', 'PAUSED')) AS active_campaigns,
         (SELECT count(*)::int FROM publication_jobs WHERE organization_id = ${user.organizationId} AND status IN (

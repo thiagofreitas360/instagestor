@@ -1,4 +1,4 @@
-import { accountActivity, type AccountActivityDates } from "./account-activity";
+import { accountActivity, inDateRange, type AccountActivityDates, type DateRange } from "./account-activity";
 
 /** Como a conta foi conectada: por uma pessoa (MANUAL) ou por automação (AUTO). Nulo = não informado. */
 export const CONNECTION_MODES = { MANUAL: "Manual", AUTO: "Automática" } as const;
@@ -16,11 +16,11 @@ export type ReconnectStatsRow = { mode: ConnectionMode | null; connected: number
  */
 export function reconnectStatsByMode(
   accounts: Array<AccountActivityDates & { connection_mode: ConnectionMode | null }>,
-  range?: { from: Date; to: Date },
+  range?: DateRange,
 ): { rows: ReconnectStatsRow[]; total: ReconnectStatsRow } {
   const cohort = accounts.filter((account) => {
     const startedAt = accountActivity(account).startedAt;
-    return startedAt !== null && (!range || (startedAt >= range.from && startedAt < range.to));
+    return startedAt !== null && inDateRange(startedAt, range);
   });
   const summarize = (mode: ConnectionMode | null, group: typeof cohort): ReconnectStatsRow => {
     const reauth = group.filter((account) => account.status === "REAUTH_REQUIRED").length;

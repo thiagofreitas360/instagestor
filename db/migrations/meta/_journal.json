@@ -218,6 +218,13 @@
       "when": 1794440476724,
       "tag": "0030_highlight_checker",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1795049365567,
+      "tag": "0031_hide_reauth_accounts",
+      "breakpoints": true
     }
   ]
 }

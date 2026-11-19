@@ -42,4 +42,10 @@ describe("reconnectStatsByMode", () => {
     ]);
     expect(stats.total).toEqual({ mode: null, connected: 1, reauth: 1, percent: 100 });
   });
+
+  it("aceita intervalo personalizado com só um extremo", () => {
+    const accounts = [account("AUTO", "REAUTH_REQUIRED", yesterday), account("AUTO", "CONNECTED", lastWeek)];
+    expect(reconnectStatsByMode(accounts, { from: new Date("2026-10-29T03:00:00Z") }).total.connected).toBe(1);
+    expect(reconnectStatsByMode(accounts, { to: new Date("2026-10-29T03:00:00Z") }).total).toMatchObject({ connected: 1, reauth: 0 });
+  });
 });

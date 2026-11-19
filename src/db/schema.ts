@@ -204,6 +204,8 @@ export const instagramAccounts = pgTable(
     highlightCount: integer("highlight_count"),
     highlightCheckedAt: timestamp("highlight_checked_at", { withTimezone: true }),
     highlightCheckError: text("highlight_check_error"),
+    // Ocultada da lista de Contas enquanto pede reconexão; reconectar pelo OAuth limpa.
+    hiddenAt: timestamp("hidden_at", { withTimezone: true }),
     ...timestamps,
     disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
   },

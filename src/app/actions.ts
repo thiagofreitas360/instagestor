@@ -6,7 +6,7 @@ import { headers } from "next/headers";
 import { z } from "zod";
 import { getSqlClient } from "@/db/client";
 import { authenticate, clearSession, clientAddressFromHeaders, requireAdmin, setSession } from "@/server/auth";
-import { banAccount, createFakeAccounts, disconnectAccount, requestInsightsRefresh, setAccountsConnectionMode, setAccountsNewStatus, unbanAccount, verifyAccount, verifyConnectedAccounts } from "@/server/accounts";
+import { banAccount, createFakeAccounts, disconnectAccount, hideReauthAccounts, requestInsightsRefresh, setAccountsConnectionMode, setAccountsNewStatus, unbanAccount, verifyAccount, verifyConnectedAccounts } from "@/server/accounts";
 import { createCampaign, createGroup, deleteGroup, replaceGroupMembers, resolveTargetIds, updateGroup } from "@/server/campaigns";
 import { deleteMetaApp, saveMetaApp } from "@/server/meta-apps";
 import { finishHighlightCheck, requestHighlightCheck } from "@/server/highlight-checker";
@@ -87,6 +87,18 @@ export async function disconnectAccountAction(formData: FormData) {
   } catch (error) {
     back("/contas", error);
   }
+}
+
+export async function hideReauthAccountsAction() {
+  const user = await requireAdmin();
+  let count = 0;
+  try {
+    count = await hideReauthAccounts(user.organizationId);
+    revalidatePath("/contas");
+  } catch (error) {
+    back("/contas", error);
+  }
+  redirect(`/contas?ok=${encodeURIComponent(`${count} conta(s) pedindo reconexão saíram da lista`)}`);
 }
 
 export async function verifyAccountAction(formData: FormData) {
