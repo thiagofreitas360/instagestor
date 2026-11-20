@@ -22,12 +22,33 @@ const EVENT_ALIASES: Record<string, "LEAD" | "PIX" | "SALE" | "UPSELL"> = {
   upsell: "UPSELL", upsell_approved: "UPSELL",
 };
 
+function asObj(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
 function pickAmountCents(body: Record<string, unknown>): number | null {
-  const tx = body.transaction as Record<string, unknown> | undefined;
-  const pay = body.payment as Record<string, unknown> | undefined;
-  const raw = body.amount ?? body.value ?? tx?.amount ?? pay?.amount;
+  // Muitos provedores (SharkBot etc.) aninham tudo em `data`. Procuramos o valor
+  // bruto da venda em data.transaction / transaction / payment / order e no topo.
+  const data = asObj(body.data) ?? body;
+  const tx = asObj(data.transaction) ?? asObj(body.transaction);
+  const pay = asObj(data.payment) ?? asObj(body.payment);
+  const order = asObj(data.order) ?? asObj(body.order);
+  const raw =
+    tx?.amount ?? tx?.value ?? tx?.total ?? tx?.total_price ?? tx?.price ??
+    pay?.amount ?? pay?.value ??
+    order?.amount ?? order?.total ?? order?.total_price ??
+    data.amount ?? data.value ?? data.total ?? data.total_price ?? data.price ?? data.valor ??
+    body.amount ?? body.value ?? body.total ?? body.price;
   if (raw === null || raw === undefined) return null;
-  const num = typeof raw === "string" ? Number(raw.replace(/\s/g, "").replace(",", ".")) : Number(raw);
+  let num: number;
+  if (typeof raw === "number") {
+    num = raw;
+  } else {
+    // string: "R$ 1.234,56" / "97,50" / "97.50"
+    let s = String(raw).replace(/[^\d.,-]/g, "");
+    if (s.includes(",")) s = s.replace(/\./g, "").replace(",", "."); // pt-BR: ponto milhar, vírgula decimal
+    num = Number(s);
+  }
   if (!Number.isFinite(num) || num < 0) return null;
   return Math.round(num * 100);
 }
@@ -68,13 +89,17 @@ export async function ingestSalesEvent(
   if (!webhook) return { ok: false, status: 404 };
 
   const b = body as Record<string, unknown>;
-  const rawEvent = String(b.event ?? b.status ?? b.event_name ?? b.type ?? "").trim();
+  const data = asObj(b.data) ?? b;
+  const tx = asObj(data.transaction) ?? asObj(b.transaction) ?? {};
+  const rawEvent = String(b.event ?? data.event ?? b.status ?? tx.status ?? b.event_name ?? b.type ?? "").trim();
   const mapped = EVENT_ALIASES[rawEvent.toLowerCase()];
   if (!mapped) return { ok: true, status: 200, result: "ignored" };
 
-  const externalId = b.id !== null && b.id !== undefined ? String(b.id).slice(0, 200) : null;
+  const idRaw = tx.external_id ?? tx.id ?? data.id ?? b.id;
+  const externalId = idRaw !== null && idRaw !== undefined ? String(idRaw).slice(0, 200) : null;
   const amountCents = pickAmountCents(b);
-  const productName = b.product_name !== null && b.product_name !== undefined ? String(b.product_name).slice(0, 200) : null;
+  const nameRaw = tx.plan_name ?? tx.product_name ?? tx.plan ?? data.product_name ?? b.product_name;
+  const productName = nameRaw !== null && nameRaw !== undefined ? String(nameRaw).slice(0, 200) : null;
 
   const inserted = await sql<Array<{ id: string }>>`
     INSERT INTO sales_events (organization_id, event_type, external_id, amount_cents, product_name, raw_event, payload)
