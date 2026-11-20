@@ -168,8 +168,10 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                 <span className="goal-amount"><i>R$</i>{brlNum(dashboard.allTimeRevenueCents)}</span>
               </div>
               <div className="goal-mid">
-                <div className="goal-track" aria-hidden="true"><div className="goal-fill" style={{ width: `${goalPct}%` }} /></div>
-                <span className="goal-pct" style={{ left: `${Math.min(Math.max(goalPct, 8), 92)}%` }}>{pct(goalPct)}%</span>
+                <div className="goal-track" aria-hidden="true">
+                  <div className="goal-fill" style={{ width: `${goalPct}%` }} />
+                  <span className="goal-pct" style={{ left: `${Math.min(Math.max(goalPct, 12), 88)}%` }}>{pct(goalPct)}%</span>
+                </div>
               </div>
               <div className="goal-foot">
                 <span className="goal-dots" aria-hidden="true">
@@ -178,7 +180,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                 <span>
                   Meta {brlCompact(goalCents)}
                   {" · "}
-                  {dashboard.allTimeRevenueCents >= goalCents ? <b>atingida</b> : <>faltam <b>{brl(goalCents - dashboard.allTimeRevenueCents)}</b></>}
+                  {dashboard.allTimeRevenueCents >= goalCents ? <b>atingida</b> : <>faltam <b>{brlCompact(goalCents - dashboard.allTimeRevenueCents)}</b></>}
                 </span>
               </div>
             </div>
