@@ -88,7 +88,7 @@ export const campaignOrigin = pgEnum("campaign_origin", ["MANUAL", "LOOP", "SCHE
 export const loopStatus = pgEnum("loop_status", ["ACTIVE", "PAUSED"]);
 export const automatedMediaType = pgEnum("automated_media_type", ["REELS", "IMAGE", "MIXED"]);
 export const scheduleStatus = pgEnum("schedule_status", ["ACTIVE", "CANCELLED"]);
-export const appTheme = pgEnum("app_theme", ["LIGHT", "DARK"]);
+export const appTheme = pgEnum("app_theme", ["LIGHT", "DARK", "GTA"]);
 export const autoCommentStatus = pgEnum("auto_comment_status", [
   "QUEUED",
   "PROCESSING",

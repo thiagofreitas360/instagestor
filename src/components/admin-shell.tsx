@@ -2,6 +2,7 @@ import Link from "next/link";
 import { logoutAction } from "@/app/actions";
 import { AppNav } from "@/components/app-nav";
 import { AppTopbar } from "@/components/app-topbar";
+import { GtaBackdrop } from "@/components/gta-backdrop";
 
 function Brand() {
   return (
@@ -40,12 +41,13 @@ export function AdminShell({
 }: {
   email: string;
   organizationName: string;
-  theme: "LIGHT" | "DARK";
+  theme: "LIGHT" | "DARK" | "GTA";
   isPlatformAdmin: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <div className="admin-shell" data-theme={theme}>
+    <div className="admin-shell" data-theme={theme === "GTA" ? "DARK" : theme} data-palette={theme}>
+      {theme === "GTA" ? <GtaBackdrop /> : null}
       <a className="skip-link" href="#conteudo">
         Pular para o conteúdo
       </a>

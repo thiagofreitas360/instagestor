@@ -232,6 +232,13 @@
       "when": 1795181641192,
       "tag": "0032_steady_radioactive_man",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1795196836591,
+      "tag": "0033_lethal_iron_patriot",
+      "breakpoints": true
     }
   ]
 }

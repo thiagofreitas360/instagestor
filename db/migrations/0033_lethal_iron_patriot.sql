@@ -1,0 +1,1 @@
+ALTER TYPE "public"."app_theme" ADD VALUE 'GTA';

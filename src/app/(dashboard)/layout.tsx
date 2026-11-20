@@ -4,7 +4,7 @@ import { requireAdmin } from "@/server/auth";
 
 export default async function DashboardLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const user = await requireAdmin();
-  const [settings] = await getSqlClient()<Array<{ theme: "LIGHT" | "DARK" }>>`
+  const [settings] = await getSqlClient()<Array<{ theme: "LIGHT" | "DARK" | "GTA" }>>`
     SELECT theme FROM settings WHERE organization_id = ${user.organizationId}
   `;
   return (

@@ -10,7 +10,7 @@ type Settings = {
   default_delay_mode: "FIXED" | "RANDOM";
   default_delay_min: number;
   default_delay_max: number;
-  theme: "LIGHT" | "DARK";
+  theme: "LIGHT" | "DARK" | "GTA";
   default_warmup_profile: WarmupProfile | null;
   revenue_goal_cents: number | null;
   updated_at: Date;
@@ -67,6 +67,7 @@ export default async function SettingsPage({ searchParams }: PageProps) {
               <select name="theme" defaultValue={settings.theme}>
                 <option value="LIGHT">Claro</option>
                 <option value="DARK">Escuro</option>
+                <option value="GTA">GTA VI</option>
               </select>
             </label>
             <label>

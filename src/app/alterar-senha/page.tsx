@@ -12,14 +12,15 @@ export default async function ChangePasswordPage({ searchParams }: {
   const user = await currentUser();
   if (!user) redirect("/login");
   if (!user.mustChangePassword) redirect("/dashboard");
-  const [settings] = await getSqlClient()<Array<{ theme: "LIGHT" | "DARK" }>>`
+  const [settings] = await getSqlClient()<Array<{ theme: "LIGHT" | "DARK" | "GTA" }>>`
     SELECT theme FROM settings WHERE organization_id = ${user.organizationId}
   `;
   const query = await searchParams;
   const error = Array.isArray(query.erro) ? query.erro[0] : query.erro;
+  const theme = settings?.theme ?? "LIGHT";
 
   return (
-    <div data-theme={settings?.theme ?? "LIGHT"}>
+    <div data-theme={theme === "GTA" ? "DARK" : theme} data-palette={theme}>
       <main className="login-shell">
         <section className="login-card" aria-labelledby="password-title">
           <div className="brand-mark" aria-hidden="true">IG</div>

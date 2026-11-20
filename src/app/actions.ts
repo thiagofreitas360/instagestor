@@ -798,7 +798,7 @@ export async function saveSettingsAction(formData: FormData) {
         delayMode: z.enum(["FIXED", "RANDOM"]),
         delayMinMinutes: z.coerce.number().int().min(25).max(60),
         delayMaxMinutes: z.coerce.number().int().min(25).max(60),
-        theme: z.enum(["LIGHT", "DARK"]),
+        theme: z.enum(["LIGHT", "DARK", "GTA"]),
         warmupProfile: z.enum(["EXPRESS", "FAST", "BALANCED", "CONSERVATIVE", "OFF"]),
         revenueGoal: z.string().max(20),
       })

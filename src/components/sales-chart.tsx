@@ -72,8 +72,8 @@ export function SalesChart({ points }: { points: Point[] }) {
         <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
           <defs>
             <linearGradient id="sales-area-fill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.28" />
-              <stop offset="100%" stopColor="#3b82f6" stopOpacity="0" />
+              <stop className="sc-area-stop" offset="0%" stopColor="#3b82f6" stopOpacity="0.28" />
+              <stop className="sc-area-stop" offset="100%" stopColor="#3b82f6" stopOpacity="0" />
             </linearGradient>
           </defs>
           {ticks.map((_, index) => (
