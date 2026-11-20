@@ -169,7 +169,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               </div>
               <div className="goal-mid">
                 <div className="goal-track" aria-hidden="true"><div className="goal-fill" style={{ width: `${goalPct}%` }} /></div>
-                <span className="goal-pct">{pct(goalPct)}%</span>
+                <span className="goal-pct" style={{ left: `${Math.min(Math.max(goalPct, 8), 92)}%` }}>{pct(goalPct)}%</span>
               </div>
               <div className="goal-foot">
                 <span className="goal-dots" aria-hidden="true">

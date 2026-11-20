@@ -528,11 +528,11 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--brand); 
 .goal-top strong { overflow: hidden; color: var(--text); font-size: 13px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .goal-amount { flex: 0 0 auto; color: var(--text); font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .goal-amount i { margin-right: 3px; color: var(--text-soft); font-size: 10px; font-style: normal; font-weight: 700; }
-.goal-mid { display: flex; align-items: center; gap: 8px; }
+.goal-mid { position: relative; padding-top: 16px; }
 .goal-track { flex: 1; height: 5px; overflow: hidden; border-radius: 999px; background: rgb(0 0 0 / 0.08); }
 [data-theme="DARK"] .goal-track { background: rgb(255 255 255 / 0.08); }
 .goal-fill { min-width: 4px; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #3b82f6, #22c55e); }
-.goal-pct { padding: 1px 7px; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.goal-pct { position: absolute; top: 0; transform: translateX(-50%); height: 15px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--card-bg); color: var(--text); font-size: 10px; line-height: 13px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
 .goal-foot { display: flex; align-items: center; gap: 8px; color: var(--text-faint); font-size: 11px; white-space: nowrap; }
 .goal-foot b { color: var(--text); font-weight: 700; }
 .goal-dots { display: inline-flex; gap: 3px; }
