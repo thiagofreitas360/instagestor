@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { cancelHighlightCheckAction, createFakeAccountsAction, disconnectAccountAction, hideReauthAccountsAction, requestHighlightCheckAction, setAccountsConnectionModeAction, verifyConnectedAccountsAction } from "@/app/actions";
+import { cancelHighlightCheckAction, createFakeAccountsAction, disconnectAccountAction, hideDisconnectedAccountsAction, requestHighlightCheckAction, setAccountsConnectionModeAction, verifyConnectedAccountsAction } from "@/app/actions";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { highlightCheckStatus } from "@/server/highlight-checker";
 import { getSqlClient } from "@/db/client";
-import { EmptyState, formatDate, MessageBanner, MetricCard, PageHeader, Panel, StatusBadge, initials } from "@/components/ui";
+import { EmptyState, formatDate, MessageBanner, MetricCard, Panel, StatusBadge, initials } from "@/components/ui";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { AccountGroupSelect } from "@/components/account-group-select";
 import { InstagramConnectButton } from "@/components/instagram-connect-button";
 import { AccountBulkSelection } from "@/components/account-bulk-selection";
 import { AccountWarmupBadge } from "@/components/account-warmup-badge";
@@ -40,8 +41,21 @@ type AccountRow = AccountActivityDates & {
   highlight_checked_at: Date | null;
   highlight_check_error: string | null;
   hidden_at: Date | null;
+  groups: GroupRow[] | string;
 };
-type GroupRow = { id: string; name: string };
+type GroupRow = { id: string; name: string; color: string };
+
+const usersIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+  </svg>
+);
+const instagramIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="2" y="2" width="20" height="20" rx="5" /><circle cx="12" cy="12" r="4" /><line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
+  </svg>
+);
+const NO_GROUP: GroupRow = { id: "sem-grupo", name: "Sem grupo", color: "#64748b" };
 
 type PageProps = {
   searchParams: Promise<{ erro?: string | string[]; ok?: string | string[]; filtro?: string | string[]; nicho?: string | string[]; busca?: string | string[]; tipo?: string | string[]; perfil?: string | string[]; vinculo?: string | string[]; periodo?: string | string[]; de?: string | string[]; ate?: string | string[]; conexao?: string | string[]; conectada?: string | string[]; conectadas_em?: string | string[]; conectadas_de?: string | string[]; conectadas_ate?: string | string[] }>;
@@ -71,6 +85,8 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           FILTER (WHERE group_row.name IS NOT NULL), '{}') AS group_names,
         coalesce(array_agg(DISTINCT group_row.id::text)
           FILTER (WHERE group_row.id IS NOT NULL), '{}') AS group_ids,
+        coalesce(jsonb_agg(DISTINCT jsonb_build_object('id', group_row.id, 'name', group_row.name, 'color', group_row.color))
+          FILTER (WHERE group_row.id IS NOT NULL), '[]'::jsonb) AS groups,
         count(DISTINCT job.id) FILTER (WHERE job.status = 'PUBLISHED')::int AS published_count,
         max(job.published_at) FILTER (WHERE job.status = 'PUBLISHED') AS last_published_at,
         (SELECT app.name FROM meta_apps app WHERE app.id = account.meta_app_id) AS meta_app_name
@@ -88,20 +104,21 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         END,
         account.username
     `,
-    sql<GroupRow[]>`SELECT id, name FROM account_groups WHERE organization_id = ${user.organizationId} ORDER BY name`,
+    sql<GroupRow[]>`SELECT id, name, color FROM account_groups WHERE organization_id = ${user.organizationId} ORDER BY name`,
     sql<Array<{ default_timezone: string }>>`
       SELECT coalesce((SELECT default_timezone FROM settings WHERE organization_id = ${user.organizationId}), 'America/Sao_Paulo') AS default_timezone
     `,
     highlightCheckStatus(user.organizationId),
   ]);
   // Ocultadas pelo botão somem da página, mas continuam na estatística de reconexões.
-  const accounts = allAccounts.filter((account) => !(account.status === "REAUTH_REQUIRED" && account.hidden_at));
+  const hideable = (account: AccountRow) => ["REAUTH_REQUIRED", "DISCONNECTED"].includes(account.status);
+  const accounts = allAccounts.filter((account) => !(hideable(account) && account.hidden_at));
   const highlightPercent = highlight?.run_total ? Math.min(100, Math.round((highlight.done / highlight.run_total) * 100)) : 0;
   const fakeMode = process.env.INSTAGRAM_PROVIDER === "fake"
     && (process.env.NODE_ENV !== "production" || process.env.ALLOW_FAKE_PROVIDER_IN_PRODUCTION === "true");
   const connected = accounts.filter((account) => ["CONNECTED", "TOKEN_EXPIRING"].includes(account.status)).length;
   const needsAttention = accounts.filter((account) => ["REAUTH_REQUIRED", "ERROR"].includes(account.status)).length;
-  const reauthCount = accounts.filter((account) => account.status === "REAUTH_REQUIRED").length;
+  const hideableCount = accounts.filter(hideable).length;
   const selectedFilter = first(params.filtro) ?? "todas";
   // Filtro por data em qualquer aba: presets ou intervalo personalizado (de/até, só quando periodo=personalizado).
   const requestedPeriod = first(params.periodo);
@@ -173,33 +190,152 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   });
   const returnTo = `/contas${returnParams.size ? `?${returnParams}` : ""}`;
 
-  return (
-    <div className="page-stack">
-      <PageHeader
-        eyebrow="Canais"
-        title="Contas do Instagram"
-        description={`${connected} de ${accounts.length} contas disponíveis para publicação${needsAttention ? ` · ${needsAttention} precisam de atenção` : ""}.`}
-        actions={
-          <>
-            <form action={verifyConnectedAccountsAction}>
-              <button className="button button-secondary" type="submit">Verificar conexões</button>
-            </form>
-            {highlight?.running ? null : (
-              <form action={requestHighlightCheckAction}>
-                <button className="button button-secondary" type="submit">Conferir destaques</button>
-              </form>
-            )}
-            {reauthCount ? (
-              <form action={hideReauthAccountsAction}>
-                <ConfirmSubmitButton className="button button-danger" message={`Tem certeza? As ${reauthCount} conta(s) que estão pedindo reconexão vão sair da lista. As contas conectadas não mudam. Se reconectar uma delas pelo "Conectar Instagram", ela volta a aparecer.`}>
-                  Tirar da lista {reauthCount} pedindo reconexão
-                </ConfirmSubmitButton>
+  // Cada conta aparece uma vez, na seção do seu primeiro grupo (por nome); contagens seguem a mesma regra.
+  const groupsOf = (account: AccountRow): GroupRow[] =>
+    (typeof account.groups === "string" ? (JSON.parse(account.groups) as GroupRow[]) : account.groups)
+      .slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  const isActive = (account: AccountRow) => ["CONNECTED", "TOKEN_EXPIRING"].includes(account.status);
+  const byGroup = (list: AccountRow[]) => {
+    const buckets = new Map<string, { group: GroupRow; accounts: AccountRow[]; active: number }>();
+    for (const account of list) {
+      const group = groupsOf(account)[0] ?? NO_GROUP;
+      const bucket = buckets.get(group.id) ?? { group, accounts: [], active: 0 };
+      bucket.accounts.push(account);
+      if (isActive(account)) bucket.active += 1;
+      buckets.set(group.id, bucket);
+    }
+    return [...buckets.values()].sort((a, b) =>
+      a.group.id === NO_GROUP.id ? 1 : b.group.id === NO_GROUP.id ? -1 : a.group.name.localeCompare(b.group.name, "pt-BR"));
+  };
+  const groupSummary = byGroup(accounts);
+  const sections = byGroup(filteredAccounts);
+  const percent = (part: number, whole: number) => `${whole ? Math.round((part / whole) * 100) : 0}%`;
+
+  const renderRow = (account: AccountRow) => {
+    const warmup = accountWarmup(account.warmup_profile, account.created_at);
+    const total = account.publishing_limit_total ?? 0;
+    const usage = account.publishing_limit_usage ?? 0;
+    const usagePercent = total ? Math.min(100, Math.round((usage / total) * 100)) : 0;
+    const accountGroupList = groupsOf(account);
+    return (
+      <tr key={account.id}>
+        <td data-label="Selecionar" className="account-select-cell"><input type="checkbox" name="accountIds" value={account.id} form="account-classification-form" aria-label={`Selecionar @${account.username}`} /></td>
+        <td data-label="Conta">
+          <Link className="account-cell" href={`/contas/${account.id}`}>
+            <span className="account-avatar" aria-hidden="true">
+              {account.profile_picture_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={account.profile_picture_url} alt="" loading="lazy" referrerPolicy="no-referrer" />
+              ) : initials(account.display_name ?? account.username)}
+            </span>
+            <span>
+              <strong>{account.display_name ?? `@${account.username}`}</strong>
+              <AccountWarmupBadge profile={account.warmup_profile} />
+              {warmup?.active ? <small>Em aquecimento · dia {warmup.day}</small> : account.warmup_profile ? <small>Aquecimento concluído</small> : null}
+              {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
+              <small>
+                @{account.username}{account.account_type ? ` · ${account.account_type}` : ""}
+                {account.connection_mode ? ` · ${CONNECTION_MODES[account.connection_mode]}` : ""}
+                {account.meta_app_name ? ` · via ${account.meta_app_name}` : ""}
+              </small>
+            </span>
+          </Link>
+        </td>
+        <td data-label="Status" className="cell-wrap">
+          <StatusBadge status={account.status} />
+          {account.token_expires_at ? <small>Token até {formatDate(account.token_expires_at, { dateOnly: true })}</small> : null}
+          {account.highlight_check_error ? (
+            <small className="muted" title={account.highlight_check_error}>Destaque: não deu para conferir</small>
+          ) : account.highlight_count === 0 ? (
+            <span className="highlight-missing-badge" title={`Conferido em ${formatDate(account.highlight_checked_at)}`}>Sem destaque</span>
+          ) : account.highlight_count ? (
+            <small>{account.highlight_count} destaque(s) · {formatDate(account.highlight_checked_at, { dateOnly: true })}</small>
+          ) : null}
+          {account.last_error_message ? (
+            <small className="error-copy account-last-error" title={account.last_error_message}>
+              Último erro: {account.last_error_message}
+              {account.last_error_at ? ` · ${formatDate(account.last_error_at)}` : ""}
+            </small>
+          ) : null}
+        </td>
+        <td data-label="Conexão / atividade"><AccountActivity account={account} /></td>
+        <td data-label="Limite de publicação">
+          {total ? (
+            <div className="quota-cell">
+              <span>{usage} de {total}</span>
+              <div className="progress-track progress-compact" aria-label={`${usagePercent}% do limite utilizado`}>
+                <div className="progress-value" style={{ width: `${usagePercent}%` }} />
+              </div>
+            </div>
+          ) : <span className="muted">Não consultado</span>}
+        </td>
+        <td data-label="Grupo">
+          <AccountGroupSelect
+            accountId={account.id}
+            username={account.username}
+            groups={groups}
+            currentIds={accountGroupList.map((group) => group.id)}
+            returnTo={returnTo}
+          />
+          {accountGroupList.length > 1 ? <small title={accountGroupList.map((group) => group.name).join(", ")}>{accountGroupList.map((group) => group.name).join(", ")}</small> : null}
+        </td>
+        <td data-label="Publicações">
+          <span className="table-main-value">{account.published_count}</span>
+          {account.published_count ? <small>Última: {formatDate(account.last_published_at)}</small> : <span className="never-posted-tag">Ainda não publicou</span>}
+        </td>
+        <td data-label="Ação" className="table-action-column">
+          <div className="table-actions">
+            {account.status === "REAUTH_REQUIRED" ? <InstagramConnectButton accountId={account.id} className="button button-small button-primary">Reconectar</InstagramConnectButton> : null}
+            <Link className="button button-small button-secondary" href={`/contas/${account.id}`}>Detalhes</Link>
+            {!(["DISCONNECTED", "DISABLED", "BANNED"].includes(account.status)) ? (
+              <form action={disconnectAccountAction}>
+                <input type="hidden" name="accountId" value={account.id} />
+                <ConfirmSubmitButton className="button button-small button-quiet-danger" message={`Desconectar @${account.username}? Publicações pendentes dessa conta serão canceladas.`}>Desconectar</ConfirmSubmitButton>
               </form>
             ) : null}
-            <InstagramConnectButton>Conectar Instagram</InstagramConnectButton>
-          </>
-        }
-      />
+          </div>
+        </td>
+      </tr>
+    );
+  };
+
+  return (
+    <div className="page-stack">
+      <header className="page-hero">
+        <div className="page-hero-copy">
+          <p className="eyebrow">Canais</p>
+          <h1>Gestão de <em className="text-gradient">Contas do Instagram</em></h1>
+          <p className="page-description">Conecte, organize por grupo e acompanhe a saúde de cada conta.</p>
+          <span className="count-chip">
+            <span className="count-chip-dot" aria-hidden="true" />
+            <b>{connected}/{accounts.length}</b> contas ativas{needsAttention ? ` · ${needsAttention} precisam de atenção` : ""}
+          </span>
+        </div>
+        <div className="page-hero-actions">
+          <form action={verifyConnectedAccountsAction}>
+            <button className="button button-secondary" type="submit">Verificar conexões</button>
+          </form>
+          {highlight?.running ? null : (
+            <form action={requestHighlightCheckAction}>
+              <button className="button button-secondary" type="submit">Conferir destaques</button>
+            </form>
+          )}
+          {hideableCount ? (
+            <form action={hideDisconnectedAccountsAction}>
+              <span title={`Tirar da lista as ${hideableCount} conta(s) pedindo reconexão ou desconectadas`}>
+                <ConfirmSubmitButton className="button button-danger" message={`Tem certeza? As ${hideableCount} conta(s) pedindo reconexão ou desconectadas vão sair da lista. As contas conectadas não mudam. Se reconectar uma delas pelo "Conectar Instagram", ela volta a aparecer.`}>
+                  Limpar desconectadas ({hideableCount})
+                </ConfirmSubmitButton>
+              </span>
+            </form>
+          ) : (
+            <button className="button button-quiet-danger" type="button" disabled title="Nenhuma conta pedindo reconexão ou desconectada agora">
+              Limpar desconectadas
+            </button>
+          )}
+          <InstagramConnectButton className="button button-primary button-hero">{instagramIcon}Conectar Instagram</InstagramConnectButton>
+        </div>
+      </header>
       <MessageBanner error={first(params.erro)} success={first(params.ok)} />
       {highlight?.running ? (
         <Panel title="Conferindo destaques" description="O conferidor no seu PC abre o perfil de cada conta conectada, um por vez.">
@@ -242,7 +378,33 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         </Panel>
       ) : null}
 
-      <form className="analytics-filters" method="get" action="/contas">
+      <section className="group-summary" aria-label="Contas por grupo">
+        <div className="group-stat group-stat-total">
+          <span className="group-stat-label">Total de contas</span>
+          <strong>{accounts.length}</strong>
+          <span className="group-stat-meta"><b>{connected}</b> ativas · {accounts.length - connected} inativas</span>
+          <span className="mini-progress" aria-hidden="true"><i style={{ width: percent(connected, accounts.length) }} /></span>
+        </div>
+        {groupSummary.map(({ group, accounts: members, active }) => {
+          const body = (
+            <>
+              <span className="group-stat-label"><span className="group-dot" style={{ background: group.color }} aria-hidden="true" />{group.name}</span>
+              <strong>{active}<small> ativas</small></strong>
+              <span className="group-stat-meta">de {members.length} {members.length === 1 ? "conta" : "contas"} no grupo</span>
+              <span className="mini-progress" aria-hidden="true"><i style={{ width: percent(active, members.length), background: group.color }} /></span>
+            </>
+          );
+          return group.id === NO_GROUP.id
+            ? <div className="group-stat" key={group.id}>{body}</div>
+            : (
+              <Link className={`group-stat${selectedNiche === group.id ? " is-active" : ""}`} href={`/contas?nicho=${group.id}`} key={group.id} title={`Mostrar só ${group.name}`}>
+                {body}
+              </Link>
+            );
+        })}
+      </section>
+
+      <form className="analytics-filters filter-bar" method="get" action="/contas">
         {selectedFilter !== "todas" ? <input type="hidden" name="filtro" value={selectedFilter} /> : null}
         {statsPeriod ? <input type="hidden" name="conectadas_em" value={statsPeriod} /> : null}
         {statsFrom ? <input type="hidden" name="conectadas_de" value={statsFrom} /> : null}
@@ -310,7 +472,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         <button className="button button-secondary" type="submit">Aplicar filtros</button>
       </form>
 
-      <nav className="page-actions" aria-label="Filtrar contas">
+      <nav className="chip-bar" aria-label="Filtrar contas">
         {[
           ["todas", "Todas"],
           ["conectadas", "Conectadas"],
@@ -321,7 +483,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           ["sem_destaque", "Sem destaque"],
         ].map(([value, label]) => (
           <Link
-            className={`button button-small ${selectedFilter === value ? "button-primary" : "button-secondary"}`}
+            className={`period-chip${selectedFilter === value ? " is-active" : ""}`}
             href={`/contas?${new URLSearchParams({
               ...baseParams,
               ...(value === "todas" ? {} : { filtro: value }),
@@ -391,122 +553,76 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         </Panel>
       ) : null}
 
-      <Panel>
-        {filteredAccounts.length ? (
-          <AccountBulkSelection key={`${returnTo}:${first(params.ok) ?? ""}:${filteredAccounts.map((account) => `${account.id}:${account.is_new_account}:${account.warmup_profile}`).join(",")}`} returnTo={returnTo} total={filteredAccounts.length}>
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col" className="account-select-cell"><input type="checkbox" data-select-all aria-label={`Selecionar todas as ${filteredAccounts.length} contas deste filtro`} /></th>
-                  <th scope="col">Conta</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Conexão / atividade</th>
-                  <th scope="col">Limite de publicação</th>
-                  <th scope="col">Nichos / grupos</th>
-                  <th scope="col">Publicações</th>
-                  <th scope="col" className="table-action-column">Ação</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredAccounts.map((account) => {
-                  const warmup = accountWarmup(account.warmup_profile, account.created_at);
-                  const total = account.publishing_limit_total ?? 0;
-                  const usage = account.publishing_limit_usage ?? 0;
-                  const usagePercent = total ? Math.min(100, Math.round((usage / total) * 100)) : 0;
-                  return (
-                    <tr key={account.id}>
-                      <td data-label="Selecionar" className="account-select-cell"><input type="checkbox" name="accountIds" value={account.id} form="account-classification-form" aria-label={`Selecionar @${account.username}`} /></td>
-                      <td data-label="Conta">
-                        <Link className="account-cell" href={`/contas/${account.id}`}>
-                          <span className="account-avatar" aria-hidden="true">
-                            {account.profile_picture_url ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img src={account.profile_picture_url} alt="" loading="lazy" referrerPolicy="no-referrer" />
-                            ) : initials(account.display_name ?? account.username)}
-                          </span>
-                          <span>
-                            <strong>{account.display_name ?? `@${account.username}`}</strong>
-                            <AccountWarmupBadge profile={account.warmup_profile} />
-                            {warmup?.active ? <small>Em aquecimento · dia {warmup.day}</small> : account.warmup_profile ? <small>Aquecimento concluído</small> : null}
-                            {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
-                            <small>
-                              @{account.username}{account.account_type ? ` · ${account.account_type}` : ""}
-                              {account.connection_mode ? ` · ${CONNECTION_MODES[account.connection_mode]}` : ""}
-                              {account.meta_app_name ? ` · via ${account.meta_app_name}` : ""}
-                            </small>
-                          </span>
-                        </Link>
-                      </td>
-                      <td data-label="Status" className="cell-wrap">
-                        <StatusBadge status={account.status} />
-                        {account.token_expires_at ? <small>Token até {formatDate(account.token_expires_at, { dateOnly: true })}</small> : null}
-                        {account.highlight_check_error ? (
-                          <small className="muted" title={account.highlight_check_error}>Destaque: não deu para conferir</small>
-                        ) : account.highlight_count === 0 ? (
-                          <span className="highlight-missing-badge" title={`Conferido em ${formatDate(account.highlight_checked_at)}`}>Sem destaque</span>
-                        ) : account.highlight_count ? (
-                          <small>{account.highlight_count} destaque(s) · {formatDate(account.highlight_checked_at, { dateOnly: true })}</small>
-                        ) : null}
-                        {account.last_error_message ? (
-                          <small className="error-copy account-last-error" title={account.last_error_message}>
-                            Último erro: {account.last_error_message}
-                            {account.last_error_at ? ` · ${formatDate(account.last_error_at)}` : ""}
-                          </small>
-                        ) : null}
-                      </td>
-                      <td data-label="Conexão / atividade"><AccountActivity account={account} /></td>
-                      <td data-label="Limite de publicação">
-                        {total ? (
-                          <div className="quota-cell">
-                            <span>{usage} de {total}</span>
-                            <div className="progress-track progress-compact" aria-label={`${usagePercent}% do limite utilizado`}>
-                              <div className="progress-value" style={{ width: `${usagePercent}%` }} />
-                            </div>
-                          </div>
-                        ) : <span className="muted">Não consultado</span>}
-                      </td>
-                      <td data-label="Nichos / grupos">
-                        {account.group_names.length ? (
-                          <span className="mini-tag-list" title={account.group_names.join(", ")}>
-                            {account.group_names.slice(0, 2).map((name) => <span key={name}>{name}</span>)}
-                            {account.group_names.length > 2 ? <small>+{account.group_names.length - 2}</small> : null}
-                          </span>
-                        ) : <span className="muted">Nenhum</span>}
-                      </td>
-                      <td data-label="Publicações">
-                        <span className="table-main-value">{account.published_count}</span>
-                        <small>Última: {formatDate(account.last_published_at)}</small>
-                      </td>
-                      <td data-label="Ação" className="table-action-column">
-                        <div className="table-actions">
-                          {account.status === "REAUTH_REQUIRED" ? <InstagramConnectButton accountId={account.id} className="button button-small button-primary">Reconectar</InstagramConnectButton> : null}
-                          <Link className="button button-small button-secondary" href={`/contas/${account.id}`}>Detalhes</Link>
-                          {!(["DISCONNECTED", "DISABLED", "BANNED"].includes(account.status)) ? (
-                            <form action={disconnectAccountAction}>
-                              <input type="hidden" name="accountId" value={account.id} />
-                              <ConfirmSubmitButton className="button button-small button-quiet-danger" message={`Desconectar @${account.username}? Publicações pendentes dessa conta serão canceladas.`}>Desconectar</ConfirmSubmitButton>
-                            </form>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          </AccountBulkSelection>
-        ) : (
-          <EmptyState
-            title={accounts.length ? "Nenhuma conta neste filtro" : "Nenhuma conta conectada"}
-            description={accounts.length ? "Escolha outro filtro para ver as demais contas." : "Conecte uma conta profissional do Instagram para começar a publicar."}
-            href={accounts.length ? "/contas" : undefined}
-            actionLabel={accounts.length ? "Mostrar todas" : undefined}
-            action={<InstagramConnectButton className="button button-secondary">Conectar Instagram</InstagramConnectButton>}
-          />
-        )}
-      </Panel>
+      <section className="dcard accounts-card">
+        <header className="dcard-head">
+          <span className="dcard-ico tone-blue" aria-hidden="true">{usersIcon}</span>
+          <h2>Contas conectadas</h2>
+          <span className="dcard-meta">
+            {filteredAccounts.length} {filteredAccounts.length === 1 ? "conta" : "contas"} nesta lista
+            {sections.length ? ` · ${sections.length} ${sections.length === 1 ? "grupo" : "grupos"}` : ""}
+          </span>
+        </header>
+        <div className="dcard-body">
+          {filteredAccounts.length ? (
+            <AccountBulkSelection key={`${returnTo}:${first(params.ok) ?? ""}:${filteredAccounts.map((account) => `${account.id}:${account.is_new_account}:${account.warmup_profile}`).join(",")}`} returnTo={returnTo} total={filteredAccounts.length}>
+              <div className="account-sections">
+                {sections.map((section, sectionIndex) => (
+                  <div className="account-section" key={section.group.id} id={`grupo-${section.group.id}`}>
+                    <div className="account-section-head">
+                      <span className="group-dot" style={{ background: section.group.color }} aria-hidden="true" />
+                      <h3>{section.group.name}</h3>
+                      <span className="account-section-count"><b>{section.active}</b> ativas de {section.accounts.length}</span>
+                      <span className="mini-progress" aria-hidden="true">
+                        <i style={{ width: percent(section.active, section.accounts.length), background: section.group.color }} />
+                      </span>
+                    </div>
+                    <div className="table-scroll">
+                      <table className="accounts-table">
+                        <colgroup>
+                          <col style={{ width: 44 }} />
+                          <col />
+                          <col style={{ width: "14%" }} />
+                          <col style={{ width: "15%" }} />
+                          <col style={{ width: "11%" }} />
+                          <col style={{ width: "14%" }} />
+                          <col style={{ width: "10%" }} />
+                          <col style={{ width: 176 }} />
+                        </colgroup>
+                        <thead>
+                          <tr>
+                            <th scope="col" className="account-select-cell">
+                              {/* Um único "selecionar todas" na página: os testes e o AccountBulkSelection esperam um só. */}
+                              {sectionIndex === 0
+                                ? <input type="checkbox" data-select-all aria-label={`Selecionar todas as ${filteredAccounts.length} contas deste filtro`} />
+                                : <span className="sr-only">Selecionar</span>}
+                            </th>
+                            <th scope="col">Conta</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">Conexão / atividade</th>
+                            <th scope="col">Limite de publicação</th>
+                            <th scope="col">Grupo</th>
+                            <th scope="col">Publicações</th>
+                            <th scope="col" className="table-action-column">Ação</th>
+                          </tr>
+                        </thead>
+                        <tbody>{section.accounts.map(renderRow)}</tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </AccountBulkSelection>
+          ) : (
+            <EmptyState
+              title={accounts.length ? "Nenhuma conta neste filtro" : "Nenhuma conta conectada"}
+              description={accounts.length ? "Escolha outro filtro para ver as demais contas." : "Conecte uma conta profissional do Instagram para começar a publicar."}
+              href={accounts.length ? "/contas" : undefined}
+              actionLabel={accounts.length ? "Mostrar todas" : undefined}
+              action={<InstagramConnectButton className="button button-secondary">Conectar Instagram</InstagramConnectButton>}
+            />
+          )}
+        </div>
+      </section>
     </div>
   );
 }

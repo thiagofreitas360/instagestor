@@ -6,8 +6,8 @@ import { headers } from "next/headers";
 import { z } from "zod";
 import { getSqlClient } from "@/db/client";
 import { authenticate, clearSession, clientAddressFromHeaders, requireAdmin, setSession } from "@/server/auth";
-import { banAccount, createFakeAccounts, disconnectAccount, hideReauthAccounts, requestInsightsRefresh, setAccountsConnectionMode, setAccountsNewStatus, unbanAccount, verifyAccount, verifyConnectedAccounts } from "@/server/accounts";
-import { createCampaign, createGroup, deleteGroup, replaceGroupMembers, resolveTargetIds, updateGroup } from "@/server/campaigns";
+import { banAccount, createFakeAccounts, disconnectAccount, hideDisconnectedAccounts, requestInsightsRefresh, setAccountsConnectionMode, setAccountsNewStatus, unbanAccount, verifyAccount, verifyConnectedAccounts } from "@/server/accounts";
+import { createCampaign, createGroup, deleteGroup, replaceGroupMembers, resolveTargetIds, setAccountGroup, updateGroup } from "@/server/campaigns";
 import { deleteMetaApp, saveMetaApp } from "@/server/meta-apps";
 import { finishHighlightCheck, requestHighlightCheck } from "@/server/highlight-checker";
 import { createLoop, createSchedule, deleteLoop, deleteSchedule, setLoopStatus, updateLoop, updateSchedule } from "@/server/automation";
@@ -89,16 +89,16 @@ export async function disconnectAccountAction(formData: FormData) {
   }
 }
 
-export async function hideReauthAccountsAction() {
+export async function hideDisconnectedAccountsAction() {
   const user = await requireAdmin();
   let count = 0;
   try {
-    count = await hideReauthAccounts(user.organizationId);
+    count = await hideDisconnectedAccounts(user.organizationId);
     revalidatePath("/contas");
   } catch (error) {
     back("/contas", error);
   }
-  redirect(`/contas?ok=${encodeURIComponent(`${count} conta(s) pedindo reconexão saíram da lista`)}`);
+  redirect(`/contas?ok=${encodeURIComponent(`${count} conta(s) pedindo reconexão ou desconectadas saíram da lista`)}`);
 }
 
 export async function verifyAccountAction(formData: FormData) {
@@ -203,6 +203,25 @@ export async function setAccountsConnectionModeAction(formData: FormData) {
     destination.searchParams.set("ok", changed
       ? `${changed} ${changed === 1 ? "conta marcada" : "contas marcadas"} como ${label}`
       : "Nenhuma conta precisava ser alterada");
+  } catch (error) {
+    destination.searchParams.set("erro", error instanceof Error ? error.message : "Operação não concluída");
+  }
+  redirect(`${destination.pathname}${destination.search}`);
+}
+
+export async function setAccountGroupAction(formData: FormData) {
+  const user = await requireAdmin();
+  const destination = new URL(safeReturnPath(formData.get("returnTo"), "/contas"), "http://localhost");
+  for (const key of ["erro", "ok", "conectada"]) destination.searchParams.delete(key);
+  try {
+    const accountId = id.parse(formData.get("accountId"));
+    const rawGroup = formData.get("groupId");
+    const groupId = rawGroup ? id.parse(rawGroup) : null;
+    await setAccountGroup(accountId, groupId, user.id, user.organizationId);
+    revalidatePath("/contas");
+    revalidatePath("/grupos");
+    revalidatePath(`/contas/${accountId}`);
+    destination.searchParams.set("ok", groupId ? "Grupo da conta atualizado" : "Conta removida dos grupos");
   } catch (error) {
     destination.searchParams.set("erro", error instanceof Error ? error.message : "Operação não concluída");
   }
@@ -781,6 +800,7 @@ export async function saveSettingsAction(formData: FormData) {
         delayMaxMinutes: z.coerce.number().int().min(25).max(60),
         theme: z.enum(["LIGHT", "DARK"]),
         warmupProfile: z.enum(["EXPRESS", "FAST", "BALANCED", "CONSERVATIVE", "OFF"]),
+        revenueGoal: z.string().max(20),
       })
       .parse({
         timezone: formData.get("timezone"),
@@ -789,18 +809,23 @@ export async function saveSettingsAction(formData: FormData) {
         delayMaxMinutes: formData.get("delayMaxMinutes"),
         theme: formData.get("theme"),
         warmupProfile: formData.get("warmupProfile"),
+        revenueGoal: formData.get("revenueGoal") ?? "",
       });
     if (values.delayMaxMinutes < values.delayMinMinutes) throw new Error("Intervalo máximo deve ser maior ou igual ao mínimo");
     const delayMin = values.delayMinMinutes * 60;
     const delayMax = values.delayMaxMinutes * 60;
     const warmupProfile = values.warmupProfile === "OFF" ? null : values.warmupProfile;
+    const goalRaw = values.revenueGoal.trim().replace(/\./g, "").replace(",", ".");
+    const goalNumber = goalRaw === "" ? null : Number(goalRaw);
+    if (goalNumber !== null && (!Number.isFinite(goalNumber) || goalNumber < 0)) throw new Error("Meta de faturamento inválida");
+    const revenueGoalCents = goalNumber === null ? null : Math.round(goalNumber * 100);
     await getSqlClient()`
-      INSERT INTO settings (organization_id, default_timezone, default_delay_mode, default_delay_min, default_delay_max, theme, default_warmup_profile)
-      VALUES (${user.organizationId}, ${values.timezone}, ${values.delayMode}, ${delayMin}, ${delayMax}, ${values.theme}, ${warmupProfile})
+      INSERT INTO settings (organization_id, default_timezone, default_delay_mode, default_delay_min, default_delay_max, theme, default_warmup_profile, revenue_goal_cents)
+      VALUES (${user.organizationId}, ${values.timezone}, ${values.delayMode}, ${delayMin}, ${delayMax}, ${values.theme}, ${warmupProfile}, ${revenueGoalCents})
       ON CONFLICT (organization_id) DO UPDATE SET default_timezone = EXCLUDED.default_timezone,
         default_delay_mode = EXCLUDED.default_delay_mode, default_delay_min = EXCLUDED.default_delay_min,
         default_delay_max = EXCLUDED.default_delay_max, theme = EXCLUDED.theme,
-        default_warmup_profile = EXCLUDED.default_warmup_profile, updated_at = now()
+        default_warmup_profile = EXCLUDED.default_warmup_profile, revenue_goal_cents = EXCLUDED.revenue_goal_cents, updated_at = now()
     `;
     revalidatePath("/configuracoes");
     revalidatePath("/", "layout");
@@ -809,4 +834,28 @@ export async function saveSettingsAction(formData: FormData) {
     if (error && typeof error === "object" && "digest" in error) throw error;
     back("/configuracoes", error);
   }
+}
+
+// Botão "Parar Operação" do dashboard: pausa campanhas ativas e cancela os disparos ainda na fila.
+export async function stopOperationAction() {
+  const user = await requireAdmin();
+  try {
+    const sql = getSqlClient();
+    await sql`
+      UPDATE campaigns SET status = 'PAUSED', paused_at = now(), updated_at = now()
+      WHERE organization_id = ${user.organizationId} AND status IN ('RUNNING', 'SCHEDULED')
+    `;
+    await sql`
+      UPDATE publication_jobs
+      SET status = 'CANCELLED', finished_at = now(), last_error_message = 'Operação interrompida', updated_at = now()
+      WHERE organization_id = ${user.organizationId} AND status IN ('QUEUED', 'RETRY_WAIT')
+    `;
+    revalidatePath("/dashboard");
+    revalidatePath("/fila");
+    revalidatePath("/campanhas");
+  } catch (error) {
+    if (error && typeof error === "object" && "digest" in error) throw error;
+    back("/dashboard", error);
+  }
+  redirect(`/dashboard?ok=${encodeURIComponent("Operação interrompida: campanhas pausadas e fila limpa")}`);
 }

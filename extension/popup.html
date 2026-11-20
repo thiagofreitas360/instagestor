@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>InstaGestor Downloader</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <defs>
+              <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" style="stop-color:#ff000e"/>
+                <stop offset="100%" style="stop-color:#6D28D9"/>
+              </linearGradient>
+            </defs>
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="url(#logoGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <polyline points="7 10 12 15 17 10" stroke="url(#logoGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <line x1="12" y1="15" x2="12" y2="3" stroke="url(#logoGrad)" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <span class="logo-title">InstaGestor</span>
+          <span class="logo-sub">Downloader</span>
+        </div>
+      </div>
+      <div class="status-dot" id="statusDot"></div>
+    </header>
+
+    <!-- Profile Card -->
+    <div class="profile-card" id="profileCard">
+      <div class="profile-avatar" id="profileAvatar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+          <circle cx="12" cy="7" r="4"/>
+        </svg>
+      </div>
+      <div class="profile-info">
+        <span class="profile-username" id="profileUsername" data-i18n="noProfile">Nenhum perfil detectado</span>
+        <span class="profile-url" id="profileUrl" data-i18n="openProfile">Abra um perfil do Instagram</span>
+      </div>
+      <div class="profile-badge" id="profileBadge">—</div>
+    </div>
+
+    <!-- Not Instagram Warning -->
+    <div class="warning-card" id="warningCard" style="display:none;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2">
+        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      <span data-i18n="warnOpen">Abra um perfil público do Instagram primeiro</span>
+    </div>
+
+    <!-- Scan Button -->
+    <button class="btn-primary" id="btnScan" disabled>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+      <span id="btnScanText" data-i18n="scanBtn">Scan Videos</span>
+    </button>
+
+    <!-- Progress -->
+    <div class="progress-section" id="progressSection" style="display:none;">
+      <div class="progress-header">
+        <span id="progressLabel" data-i18n="scanning">Escaneando...</span>
+        <span id="progressPercent">0%</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <div class="progress-sub" id="progressSub" data-i18n="connecting">Conectando ao Instagram</div>
+    </div>
+
+    <!-- Stats Bar -->
+    <div class="stats-bar" id="statsBar" style="display:none;">
+      <div class="stat">
+        <span class="stat-value" id="statCount">0</span>
+        <span class="stat-label" data-i18n="videos">vídeos</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat">
+        <span class="stat-value" id="statSize">0 MB</span>
+        <span class="stat-label" data-i18n="estimated">estimado</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat">
+        <span class="stat-value" id="statSelected">0</span>
+        <span class="stat-label" data-i18n="selectedLbl">selecionados</span>
+      </div>
+    </div>
+
+    <!-- Mode Filter Tabs -->
+    <div class="mode-tabs" id="modeTabs" style="display:none;">
+      <button class="mode-tab active" id="tabAll" data-filter="all"><span data-i18n="tabAll">Todas</span> (<span id="countAll">0</span>)</button>
+      <button class="mode-tab" id="tabReels" data-filter="reel">🎬 Reels (<span id="countReels">0</span>)</button>
+      <button class="mode-tab" id="tabPhotos" data-filter="photo">📸 <span data-i18n="tabPhotos">Fotos</span> (<span id="countPhotos">0</span>)</button>
+    </div>
+
+    <!-- Select All -->
+    <div class="select-all-bar" id="selectAllBar" style="display:none;">
+      <label class="checkbox-label">
+        <input type="checkbox" id="checkAll" checked />
+        <span class="checkmark"></span>
+        <span data-i18n="selectAll">Selecionar todos</span>
+      </label>
+      <button class="btn-ghost" id="btnClearAll" data-i18n="clear">Limpar</button>
+    </div>
+
+    <!-- Video List -->
+    <div class="video-list" id="videoList">
+      <!-- Skeleton loading -->
+      <div class="skeleton-list" id="skeletonList" style="display:none;">
+        <div class="skeleton-item">
+          <div class="skeleton-thumb"></div>
+          <div class="skeleton-info">
+            <div class="skeleton-line w80"></div>
+            <div class="skeleton-line w50"></div>
+          </div>
+        </div>
+        <div class="skeleton-item">
+          <div class="skeleton-thumb"></div>
+          <div class="skeleton-info">
+            <div class="skeleton-line w80"></div>
+            <div class="skeleton-line w50"></div>
+          </div>
+        </div>
+        <div class="skeleton-item">
+          <div class="skeleton-thumb"></div>
+          <div class="skeleton-info">
+            <div class="skeleton-line w80"></div>
+            <div class="skeleton-line w50"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Empty state -->
+      <div class="empty-state" id="emptyState">
+        <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="1.5">
+          <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+        </svg>
+        <p data-i18n="noMedia">Nenhuma mídia encontrada</p>
+        <small data-i18n="doScan">Faça o scan de um perfil do Instagram</small>
+      </div>
+
+      <!-- Video items injected by JS -->
+      <div id="videoItems"></div>
+    </div>
+
+    <!-- Download ZIP Actions (3 Modos) -->
+    <div class="footer-actions" id="footerActions" style="display:none;">
+      <div class="download-info" id="downloadInfo"></div>
+      <div class="download-buttons-group">
+        <button class="btn-download btn-reels" id="btnDownloadReels">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <span id="btnDownloadReelsText" data-i18n="dlReelsZip">🎬 Baixar Reels (ZIP)</span>
+        </button>
+        <div class="download-buttons-subrow">
+          <button class="btn-download btn-photos" id="btnDownloadPhotos">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            <span id="btnDownloadPhotosText" data-i18n="dlPhotosZip">📸 Baixar Fotos (ZIP)</span>
+          </button>
+          <button class="btn-download btn-covers" id="btnDownloadCovers">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 8h10M7 12h10M7 16h6"/></svg>
+            <span id="btnDownloadCoversText" data-i18n="dlCoversZip">🖼️ Capas Reels (ZIP)</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Logs Panel -->
+    <div class="logs-panel" id="logsPanel" style="display:none;">
+      <div class="logs-header">
+        <span data-i18n="logs">Logs</span>
+        <button class="btn-ghost-sm" id="btnClearLogs" data-i18n="clear">Limpar</button>
+      </div>
+      <div class="logs-content" id="logsContent"></div>
+    </div>
+
+    <!-- Toggle Logs -->
+    <button class="btn-logs-toggle" id="btnLogsToggle">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+      </svg>
+      <span data-i18n="logs">Logs</span>
+    </button>
+
+    <!-- ── InstaGestor branding ──────────────────────────────────────── -->
+    <footer class="autofy-footer">
+      <div class="autofy-footer-brand">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="6" fill="url(#logoGrad)"/></svg>
+        <span><span data-i18n="madeBy">Criada pela</span> <b>InstaGestor</b></span>
+      </div>
+      <a href="https://instagestor.orbih.shop" target="_blank" rel="noopener" class="autofy-footer-cta" data-i18n="createAcc">Abrir o painel →</a>
+    </footer>
+
+  </div>
+
+  <script src="libs/jszip.min.js"></script>
+  <script src="utils/i18n.js"></script>
+  <script src="utils/logger.js"></script>
+  <script src="utils/helpers.js"></script>
+  <script src="services/zipManager.js"></script>
+  <script src="services/downloader.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

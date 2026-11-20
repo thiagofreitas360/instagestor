@@ -97,6 +97,7 @@ export const autoCommentStatus = pgEnum("auto_comment_status", [
   "RECONCILIATION_REQUIRED",
   "FAILED",
 ]);
+export const saleEventType = pgEnum("sale_event_type", ["LEAD", "PIX", "SALE", "UPSELL"]);
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -204,7 +205,7 @@ export const instagramAccounts = pgTable(
     highlightCount: integer("highlight_count"),
     highlightCheckedAt: timestamp("highlight_checked_at", { withTimezone: true }),
     highlightCheckError: text("highlight_check_error"),
-    // Ocultada da lista de Contas enquanto pede reconexão; reconectar pelo OAuth limpa.
+    // Ocultada da lista de Contas enquanto pede reconexão ou está desconectada; reconectar pelo OAuth limpa.
     hiddenAt: timestamp("hidden_at", { withTimezone: true }),
     ...timestamps,
     disconnectedAt: timestamp("disconnected_at", { withTimezone: true }),
@@ -906,11 +907,53 @@ export const settings = pgTable(
     theme: appTheme("theme").notNull().default("LIGHT"),
     // Aquecimento aplicado a cada conta conectada pela primeira vez; NULL = sem aquecimento.
     defaultWarmupProfile: text("default_warmup_profile").$type<"EXPRESS" | "FAST" | "BALANCED" | "CONSERVATIVE">(),
+    // Meta de faturamento do dashboard (em centavos); NULL = sem meta exibida.
+    revenueGoalCents: integer("revenue_goal_cents"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     check("settings_delay_valid", sql`${table.defaultDelayMin} >= 0 AND ${table.defaultDelayMax} >= ${table.defaultDelayMin}`),
     check("settings_default_warmup_profile_valid", sql`${table.defaultWarmupProfile} IS NULL OR ${table.defaultWarmupProfile} IN ('EXPRESS', 'FAST', 'BALANCED', 'CONSERVATIVE')`),
+    check("settings_revenue_goal_valid", sql`${table.revenueGoalCents} IS NULL OR ${table.revenueGoalCents} >= 0`),
+  ],
+);
+
+// Webhook de vendas por organização: o bot/gateway faz POST em /api/webhooks/sales/<token>.
+// token_hash para lookup O(1) no recebimento; encrypted_token para remontar a URL na UI (botão "Copiar Webhook").
+export const salesWebhooks = pgTable("sales_webhooks", {
+  organizationId: uuid("organization_id")
+    .primaryKey()
+    .references(() => organizations.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull().unique(),
+  encryptedToken: text("encrypted_token").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  rotatedAt: timestamp("rotated_at", { withTimezone: true }),
+});
+
+// Eventos de venda recebidos pelo webhook; alimentam o funil e os KPIs do dashboard.
+export const salesEvents = pgTable(
+  "sales_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    eventType: saleEventType("event_type").notNull(),
+    externalId: text("external_id"),
+    amountCents: integer("amount_cents"),
+    productName: text("product_name"),
+    rawEvent: text("raw_event"),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    // Dedup: o mesmo aviso (id + tipo) não conta duas vezes; id de transação pode repetir entre tipos (pix→pago).
+    uniqueIndex("sales_events_dedup_idx")
+      .on(table.organizationId, table.externalId, table.eventType)
+      .where(sql`${table.externalId} IS NOT NULL`),
+    index("sales_events_org_occurred_idx").on(table.organizationId, table.occurredAt),
+    check("sales_events_amount_valid", sql`${table.amountCents} IS NULL OR ${table.amountCents} >= 0`),
   ],
 );
 

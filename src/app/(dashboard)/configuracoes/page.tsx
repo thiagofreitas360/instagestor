@@ -12,6 +12,7 @@ type Settings = {
   default_delay_max: number;
   theme: "LIGHT" | "DARK";
   default_warmup_profile: WarmupProfile | null;
+  revenue_goal_cents: number | null;
   updated_at: Date;
 };
 type PageProps = { searchParams: Promise<{ erro?: string | string[]; ok?: string | string[] }> };
@@ -31,6 +32,7 @@ export default async function SettingsPage({ searchParams }: PageProps) {
     default_delay_max: 3600,
     theme: "LIGHT" as const,
     default_warmup_profile: null,
+    revenue_goal_cents: null,
     updated_at: new Date(),
   };
   const provider = process.env.INSTAGRAM_PROVIDER === "meta" ? "Meta Instagram API" : "Provedor simulado";
@@ -95,6 +97,11 @@ export default async function SettingsPage({ searchParams }: PageProps) {
               </select>
             </label>
             <p className="form-hint">Vale para os perfis conectados daqui em diante. Os já conectados mantêm o aquecimento que têm; a etiqueta continua depois que o aquecimento termina.</p>
+            <label>
+              Meta de faturamento (R$) <span className="optional-label">opcional</span>
+              <input name="revenueGoal" type="number" min="0" step="0.01" inputMode="decimal" placeholder="Ex: 10000" defaultValue={settings.revenue_goal_cents ? settings.revenue_goal_cents / 100 : ""} />
+            </label>
+            <p className="form-hint">Exibida como barra de progresso no topo do dashboard. Deixe vazio para ocultar.</p>
             <button className="button button-primary" type="submit">Salvar preferências</button>
           </form>
         </Panel>

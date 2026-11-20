@@ -190,11 +190,11 @@ export async function disconnectAccount(accountId: string, actorUserId: string, 
   });
 }
 
-/** Tira da lista de Contas as que pedem reconexão. Status, token e histórico não mudam; reconectar traz de volta. */
-export async function hideReauthAccounts(organizationId: string) {
+/** Tira da lista de Contas as que pedem reconexão ou estão desconectadas. Status e histórico não mudam; reconectar traz de volta. */
+export async function hideDisconnectedAccounts(organizationId: string) {
   const hidden = await getSqlClient()`
     UPDATE instagram_accounts SET hidden_at = now(), updated_at = now()
-    WHERE organization_id = ${organizationId} AND status = 'REAUTH_REQUIRED' AND hidden_at IS NULL
+    WHERE organization_id = ${organizationId} AND status IN ('REAUTH_REQUIRED', 'DISCONNECTED') AND hidden_at IS NULL
   `;
   return hidden.count;
 }

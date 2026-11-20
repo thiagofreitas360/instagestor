@@ -1,21 +1,7 @@
 import Link from "next/link";
 import { logoutAction } from "@/app/actions";
-
-const navigation = [
-  { href: "/dashboard", label: "Dashboard", mark: "D" },
-  { href: "/contas", label: "Contas", mark: "@" },
-  { href: "/meta-apps", label: "Meta Apps", mark: "∞" },
-  { href: "/analises", label: "Análises", mark: "A" },
-  { href: "/grupos", label: "Grupos", mark: "G" },
-  { href: "/midias", label: "Mídias", mark: "M" },
-  { href: "/campanhas", label: "Campanhas", mark: "C" },
-  { href: "/loops", label: "Loops", mark: "L" },
-  { href: "/escalas", label: "Escalas", mark: "E" },
-  { href: "/fila", label: "Fila", mark: "F" },
-  { href: "/configuracoes", label: "Configurações", mark: "⚙" },
-] as const;
-
-const platformNavigation = [{ href: "/admin/clientes", label: "Clientes", mark: "S" }] as const;
+import { AppNav } from "@/components/app-nav";
+import { AppTopbar } from "@/components/app-topbar";
 
 function Brand() {
   return (
@@ -31,41 +17,17 @@ function Brand() {
   );
 }
 
-function Navigation({ isPlatformAdmin }: { isPlatformAdmin: boolean }) {
+function LogoutButton() {
   return (
-    <>
-      <nav aria-label="Navegação principal">
-        <ul className="nav-list">
-          {navigation.map((item) => (
-            <li key={item.href}>
-              <Link className="nav-link" href={item.href}>
-                <span className="nav-mark" aria-hidden="true">
-                  {item.mark}
-                </span>
-                {item.label}
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
-      {isPlatformAdmin ? (
-        <>
-          <div className="sidebar-section-label sidebar-section-platform">Plataforma</div>
-          <nav aria-label="Administração da plataforma">
-            <ul className="nav-list">
-              {platformNavigation.map((item) => (
-                <li key={item.href}>
-                  <Link className="nav-link" href={item.href}>
-                    <span className="nav-mark" aria-hidden="true">{item.mark}</span>
-                    {item.label}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </nav>
-        </>
-      ) : null}
-    </>
+    <form action={logoutAction}>
+      <button className="icon-button" type="submit" title="Sair" aria-label="Sair da conta">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+          <polyline points="16 17 21 12 16 7" />
+          <line x1="21" y1="12" x2="9" y2="12" />
+        </svg>
+      </button>
+    </form>
   );
 }
 
@@ -90,21 +52,12 @@ export function AdminShell({
 
       <aside className="sidebar">
         <Brand />
-        <div className="sidebar-section-label">Operação</div>
-        <Navigation isPlatformAdmin={isPlatformAdmin} />
+        <AppNav isPlatformAdmin={isPlatformAdmin} />
         <div className="sidebar-user">
           <span className="avatar" aria-hidden="true">
-            {email.slice(0, 1).toUpperCase()}
+            {organizationName.slice(0, 1).toUpperCase()}
           </span>
-          <span className="sidebar-user-copy">
-            <strong title={organizationName}>{organizationName}</strong>
-            <small title={email}>{email}</small>
-          </span>
-          <form action={logoutAction}>
-            <button className="icon-button" type="submit" title="Sair" aria-label="Sair da conta">
-              ↗
-            </button>
-          </form>
+          <LogoutButton />
         </div>
       </aside>
 
@@ -113,7 +66,7 @@ export function AdminShell({
         <details className="mobile-menu">
           <summary aria-label="Abrir menu">Menu</summary>
           <div className="mobile-menu-panel">
-            <Navigation isPlatformAdmin={isPlatformAdmin} />
+            <AppNav isPlatformAdmin={isPlatformAdmin} />
             <form action={logoutAction}>
               <button className="button button-secondary button-block" type="submit">
                 Sair de {email}
@@ -124,7 +77,8 @@ export function AdminShell({
       </header>
 
       <main className="main-content" id="conteudo" tabIndex={-1}>
-        {children}
+        <AppTopbar organizationName={organizationName} email={email} />
+        <div className="main-inner">{children}</div>
       </main>
     </div>
   );

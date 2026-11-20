@@ -199,6 +199,34 @@ export async function replaceGroupMembers(groupId: string, accountIds: string[],
   });
 }
 
+/** Coloca a conta em um único grupo (ou em nenhum), como a "pasta" de cada linha em Contas. */
+export async function setAccountGroup(accountId: string, groupId: string | null, actorUserId: string, organizationId: string) {
+  await getSqlClient().begin(async (sql) => {
+    const [account] = await sql<{ id: string }[]>`
+      SELECT id FROM instagram_accounts WHERE organization_id = ${organizationId} AND id = ${accountId} FOR UPDATE
+    `;
+    if (!account) throw new Error("Conta não encontrada");
+    if (groupId) {
+      const [group] = await sql<{ id: string }[]>`
+        SELECT id FROM account_groups WHERE organization_id = ${organizationId} AND id = ${groupId}
+      `;
+      if (!group) throw new Error("Grupo não encontrado");
+    }
+    await sql`DELETE FROM account_group_members WHERE organization_id = ${organizationId} AND instagram_account_id = ${accountId}`;
+    if (groupId) {
+      await sql`
+        INSERT INTO account_group_members (organization_id, group_id, instagram_account_id)
+        VALUES (${organizationId}, ${groupId}, ${accountId})
+      `;
+    }
+    await sql`
+      INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id, metadata_json)
+      VALUES (${organizationId}, ${actorUserId}, 'ACCOUNT_GROUP_SET', 'instagram_account', ${accountId},
+        jsonb_build_object('groupId', ${groupId}::text))
+    `;
+  });
+}
+
 export async function deleteGroup(groupId: string, organizationId: string) {
   await getSqlClient()`DELETE FROM account_groups WHERE organization_id = ${organizationId} AND id = ${groupId}`;
 }

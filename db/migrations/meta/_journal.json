@@ -225,6 +225,13 @@
       "when": 1795049365567,
       "tag": "0031_hide_reauth_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1795181641192,
+      "tag": "0032_steady_radioactive_man",
+      "breakpoints": true
     }
   ]
 }
