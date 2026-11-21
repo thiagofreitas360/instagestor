@@ -30,7 +30,7 @@ const statusLabels: Record<string, string> = {
   RECONCILIATION_REQUIRED: "Verificação manual",
   ONLINE: "Online",
   OFFLINE: "Offline",
-  BANNED: "Banida",
+  BANNED: "Suspensa",
   ACTIVE: "Ativo",
   SUSPENDED: "Suspenso",
 };

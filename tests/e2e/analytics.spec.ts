@@ -57,20 +57,15 @@ test.describe("análises", () => {
 
     await page.goto(`/contas/${accountId}`);
     await expect(page.getByRole("heading", { name: "Análises (últimos 30 dias)" })).toBeVisible();
-    await page.getByText("Registrar banimento").click();
+    await page.getByText("Registrar suspensão").click();
     await page.getByLabel("Motivo").fill("Suspensa pela Meta no e2e");
-    await page.getByRole("button", { name: "Confirmar banimento" }).click();
-    await expect(page.getByText("Conta marcada como banida").first()).toBeVisible();
-    await expect(page.getByText("Banida", { exact: true })).toBeVisible();
-
-    await page.goto("/analises/banidas");
-    await expect(page.getByText("Suspensa pela Meta no e2e")).toBeVisible();
-    await expect(page.getByRole("cell", { name: "1.000" })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "20", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Confirmar suspensão" }).click();
+    await expect(page.getByText("Conta marcada como suspensa").first()).toBeVisible();
+    await expect(page.getByText("Suspensa", { exact: true })).toBeVisible();
 
     await page.goto(`/contas/${accountId}`);
-    await page.getByRole("button", { name: "Desmarcar banimento" }).click();
-    await expect(page.getByText("Banimento desmarcado")).toBeVisible();
+    await page.getByRole("button", { name: "Reativar conta" }).click();
+    await expect(page.getByText("Suspensão removida")).toBeVisible();
     await expect(page.getByText("Desconectada", { exact: true })).toBeVisible();
   });
 });

@@ -85,15 +85,15 @@ export default async function SettingsPage({ searchParams }: PageProps) {
             </div>
             <p className="form-hint">O timer inteligente aceita uma faixa de 25 a 60 minutos entre publicações.</p>
             <label>
-              Aquecimento dos novos perfis
+              Ritmo inicial de publicação
               <select name="warmupProfile" defaultValue={settings.default_warmup_profile ?? "OFF"}>
-                <option value="OFF">Sem aquecimento</option>
+                <option value="OFF">Sem ritmo inicial</option>
                 {Object.entries(WARMUP_PROFILES).map(([value, profile]) => (
                   <option key={value} value={value}>{profile.label} · {profile.steps[profile.steps.length - 1][0]} dias</option>
                 ))}
               </select>
             </label>
-            <p className="form-hint">Vale para os perfis conectados daqui em diante. Os já conectados mantêm o aquecimento que têm; a etiqueta continua depois que o aquecimento termina.</p>
+            <p className="form-hint">Aumenta de forma gradual o volume diário de publicações das novas conexões, respeitando os limites da API. Vale para os perfis conectados daqui em diante; os já conectados mantêm o ritmo que têm.</p>
             <label>
               Meta de faturamento (R$) <span className="optional-label">opcional</span>
               <input name="revenueGoal" type="number" min="0" step="0.01" inputMode="decimal" placeholder="Ex: 10000" defaultValue={settings.revenue_goal_cents ? settings.revenue_goal_cents / 100 : ""} />

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { banAccountAction, disconnectAccountAction, refreshInsightsAction, setAccountsConnectionModeAction, unbanAccountAction, verifyAccountAction } from "@/app/actions";
+import { banAccountAction, disconnectAccountAction, refreshInsightsAction, unbanAccountAction, verifyAccountAction } from "@/app/actions";
 import { getSqlClient } from "@/db/client";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import {
@@ -23,7 +23,7 @@ import { AccountWarmupBadge } from "@/components/account-warmup-badge";
 import { accountWarmup, type WarmupProfile } from "@/lib/account-warmup";
 import { AccountActivity } from "@/components/account-activity";
 import { activityDuration, type AccountActivityDates } from "@/lib/account-activity";
-import { CONNECTION_MODES, type ConnectionMode } from "@/lib/account-connection-mode";
+import { type ConnectionMode } from "@/lib/account-connection-mode";
 
 type Account = AccountActivityDates & {
   id: string;
@@ -157,7 +157,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
             {isBanned ? (
               <form action={unbanAccountAction}>
                 <input type="hidden" name="accountId" value={account.id} />
-                <button className="button button-secondary" type="submit">Desmarcar banimento</button>
+                <button className="button button-secondary" type="submit">Reativar conta</button>
               </form>
             ) : null}
             {canVerify ? (
@@ -173,7 +173,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
 
       {isBanned ? (
         <div className="message-banner message-error" role="alert">
-          <strong>Conta marcada como banida em {formatDate(account.banned_at)}</strong>
+          <strong>Conta marcada como suspensa em {formatDate(account.banned_at)}</strong>
           <span>{account.ban_reason}</span>
         </div>
       ) : null}
@@ -188,7 +188,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
         <div className="account-hero-main">
           <StatusBadge status={account.status} />
           <AccountWarmupBadge profile={account.warmup_profile} />
-          {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
+          {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Conta recente</span> : null}
           <p>Primeira conexão em {formatDate(account.created_at, { dateOnly: true })}</p>
           <AccountActivity account={account} />
           {["CONNECTED", "TOKEN_EXPIRING"].includes(account.status) && lastPeriod ? (
@@ -207,23 +207,8 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
 
       <Panel title="Ritmo de publicação" description="Novas conexões recebem o perfil Balanceado automaticamente">
         <AccountWarmupForm key={account.warmup_profile ?? "OFF"} accountId={account.id} profile={account.warmup_profile} />
-        {warmup?.active ? <p className="account-warmup-copy">Dia {warmup.day} de {warmup.durationDays} · teto da etapa: {warmup.dailyLimit} publicações por 24 horas, respeitando o limite menor do loop.</p> : warmup ? <p className="account-warmup-copy">Aquecimento concluído · ritmo normal.</p> : null}
+        {warmup?.active ? <p className="account-warmup-copy">Dia {warmup.day} de {warmup.durationDays} · limite desta etapa: {warmup.dailyLimit} publicações por 24 horas, respeitando o limite menor do loop.</p> : warmup ? <p className="account-warmup-copy">Ritmo inicial concluído · ritmo normal.</p> : null}
         {!account.warmup_profile && account.is_new_account ? <AccountNewStatusForm key={String(account.is_new_account)} accountId={account.id} isNewAccount={account.is_new_account} /> : null}
-      </Panel>
-
-      <Panel title="Tipo de conexão" description="Manual ou automática; separa as contas nos filtros e na estatística de reconexões.">
-        <form className="inline-form" action={setAccountsConnectionModeAction}>
-          <input type="hidden" name="accountIds" value={account.id} />
-          <input type="hidden" name="returnTo" value={`/contas/${account.id}`} />
-          <label>
-            Conexão
-            <select name="connectionMode" defaultValue={account.connection_mode ?? ""} required>
-              <option value="" disabled>Não informada</option>
-              {Object.entries(CONNECTION_MODES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-          </label>
-          <button className="button button-secondary" type="submit">Salvar</button>
-        </form>
       </Panel>
 
       {account.last_error_message ? (
@@ -308,16 +293,16 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
       </Panel>
 
       {!isBanned ? (
-        <Panel className="danger-zone" title="Marcar como banida" description="Use quando a Meta suspendeu ou desativou esta conta. Jobs pendentes serão encerrados e o token descartado.">
+        <Panel className="danger-zone" title="Marcar como suspensa" description="Use quando a Meta suspendeu ou desativou esta conta. Jobs pendentes serão encerrados e o token descartado.">
           <details className="native-disclosure">
-            <summary>Registrar banimento</summary>
+            <summary>Registrar suspensão</summary>
             <form className="form-stack" action={banAccountAction}>
               <input type="hidden" name="accountId" value={account.id} />
               <label>
                 Motivo
                 <textarea name="reason" minLength={3} maxLength={500} rows={3} required placeholder="Ex.: suspensa após checkpoint de verificação" />
               </label>
-              <button className="button button-danger" type="submit">Confirmar banimento</button>
+              <button className="button button-danger" type="submit">Confirmar suspensão</button>
             </form>
           </details>
         </Panel>

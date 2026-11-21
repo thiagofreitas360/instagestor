@@ -209,7 +209,7 @@ export async function banAccount(accountId: string, reason: string, actorUserId:
       WHERE organization_id = ${organizationId} AND id = ${accountId} FOR UPDATE
     `;
     if (!account) throw new Error("Conta não encontrada");
-    if (account.status === "BANNED") throw new Error("Conta já está marcada como banida");
+    if (account.status === "BANNED") throw new Error("Conta já está marcada como suspensa");
     const [metrics] = await sql<Array<{ followers_count: number | null; media_count: number | null }>>`
       SELECT followers_count, media_count FROM account_daily_metrics
       WHERE organization_id = ${organizationId} AND instagram_account_id = ${accountId} AND followers_count IS NOT NULL
@@ -226,7 +226,7 @@ export async function banAccount(accountId: string, reason: string, actorUserId:
         ban_reason = ${trimmed}, disconnected_at = coalesce(disconnected_at, now()), updated_at = now()
       WHERE organization_id = ${organizationId} AND id = ${accountId}
     `;
-    await closeAccountJobs(sql, organizationId, accountId, "ACCOUNT_BANNED", "Conta marcada como banida");
+    await closeAccountJobs(sql, organizationId, accountId, "ACCOUNT_BANNED", "Conta marcada como suspensa");
     await sql`
       INSERT INTO audit_logs (organization_id, actor_user_id, event_type, entity_type, entity_id, metadata_json)
       VALUES (${organizationId}, ${actorUserId}, 'ACCOUNT_BANNED', 'instagram_account', ${accountId}, ${JSON.stringify({
@@ -249,7 +249,7 @@ export async function unbanAccount(accountId: string, actorUserId: string, organ
     UPDATE instagram_accounts SET status = 'DISCONNECTED', banned_at = NULL, ban_reason = NULL, updated_at = now()
     WHERE organization_id = ${organizationId} AND id = ${accountId} AND status = 'BANNED' RETURNING id
   `;
-  if (!rows.length) throw new Error("Conta não está marcada como banida");
+  if (!rows.length) throw new Error("Conta não está marcada como suspensa");
   await audit(organizationId, actorUserId, "ACCOUNT_UNBANNED", "instagram_account", accountId);
 }
 

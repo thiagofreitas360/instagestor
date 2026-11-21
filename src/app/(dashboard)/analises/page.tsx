@@ -168,7 +168,6 @@ export default async function AnalyticsPage({ searchParams }: PageProps) {
               <input type="hidden" name="returnTo" value={buildHref(base, {})} />
               <button className="button button-secondary" type="submit">Atualizar agora</button>
             </form>
-            <Link className="button button-ghost" href="/analises/banidas">Histórico de banidas</Link>
           </>
         }
       />

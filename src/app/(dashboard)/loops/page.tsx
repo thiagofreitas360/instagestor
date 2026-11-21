@@ -221,14 +221,14 @@ export default async function LoopsPage({ searchParams }: PageProps) {
               <label>Limite diário/conta<input name="dailyLimitPerAccount" type="number" min={1} max={200} defaultValue={editing?.daily_limit_per_account ?? 24} required /></label>
               <label className="loop-only-mixed">1 imagem a cada N vídeos<input name="imageEveryN" type="number" min={1} max={100} defaultValue={editing?.image_every_n || 3} required /></label>
             </div>
-            <p className="form-hint">Ao entrar no loop, cada conta espera o intervalo configurado antes da primeira postagem. Depois, o perfil de aquecimento pode aumentar a espera e reduzir o limite diário.</p>
+            <p className="form-hint">Ao entrar no loop, cada conta espera o intervalo configurado antes da primeira postagem. Depois, o ritmo inicial pode aumentar a espera e reduzir o limite diário.</p>
             <div className="loop-box loop-tiers">
               <label className="loop-check">
                 <input name="tieredLimits" type="checkbox" defaultChecked={editing?.tiered_limits ?? false} />
                 Limites por faixa de seguidores
               </label>
               <div className="loop-tier-fields">
-                <p className="form-hint">Contas pequenas usam estes limites; contas sem métrica sincronizada seguem os limites padrão.</p>
+                <p className="form-hint">Contas com menos seguidores usam estes limites; contas sem métrica sincronizada seguem os limites padrão.</p>
                 <div className="form-grid form-grid-four">
                   <label>Até quantos seguidores<input name="tierFollowerThreshold" type="number" min={0} max={100000000} defaultValue={editing?.tier_follower_threshold ?? 10000} required /></label>
                   <label>Limite diário da faixa<input name="tier1DailyLimit" type="number" min={1} max={200} defaultValue={editing?.tier1_daily_limit ?? 10} required /></label>
@@ -239,24 +239,25 @@ export default async function LoopsPage({ searchParams }: PageProps) {
             </div>
             <LoopAccountPicker accounts={selectableAccounts} initialIds={editing?.account_ids ?? []} editing={Boolean(editing)} />
             <label>Legenda padrão<textarea name="defaultCaption" rows={3} maxLength={2200} placeholder="Opcional" defaultValue={editing?.default_caption} /></label>
-            <div className="loop-box">
-              <label>
-                Auto-comentário
-                <textarea
-                  name="autoCommentText"
-                  rows={2}
-                  maxLength={2200}
-                  disabled={!commentsAvailable}
-                  placeholder={commentsAvailable ? "Ex.: Link na bio 👉 … (deixe vazio para desativar)" : "Indisponível: a permissão de comentários não é solicitada nesta versão"}
-                  defaultValue={commentsAvailable ? editing?.auto_comment_text : ""}
-                />
-              </label>
-              <label className="loop-inline-number">
-                Esperar
-                <input name="autoCommentDelayMinutes" type="number" min={0} max={10080} defaultValue={editing?.auto_comment_delay_minutes ?? 5} required />
-                min após a publicação
-              </label>
-            </div>
+            {commentsAvailable ? (
+              <div className="loop-box">
+                <label>
+                  Auto-comentário
+                  <textarea
+                    name="autoCommentText"
+                    rows={2}
+                    maxLength={2200}
+                    placeholder="Ex.: Link na bio 👉 … (deixe vazio para desativar)"
+                    defaultValue={editing?.auto_comment_text}
+                  />
+                </label>
+                <label className="loop-inline-number">
+                  Esperar
+                  <input name="autoCommentDelayMinutes" type="number" min={0} max={10080} defaultValue={editing?.auto_comment_delay_minutes ?? 5} required />
+                  min após a publicação
+                </label>
+              </div>
+            ) : null}
             <LoopMediaPool
               key={editing?.id ?? "new"}
               library={media}
@@ -308,7 +309,7 @@ export default async function LoopsPage({ searchParams }: PageProps) {
                         return <li key={account.id}>
                           <span>@{account.username}</span>
                           <AccountWarmupBadge profile={account.warmup_profile} />
-                          {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
+                          {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Conta recente</span> : null}
                           <span>{limits.minIntervalMinutes}–{limits.maxIntervalMinutes} min · limite {limits.dailyLimit}/dia</span>
                         </li>;
                       })}

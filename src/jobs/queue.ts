@@ -587,7 +587,7 @@ export async function processClaimedJob(job: ClaimedJob, workerId: string) {
       if (warmupAt.getTime() > Date.now()) {
         await fencedUpdate(job, workerId, getSqlClient()`status = 'RETRY_WAIT', next_attempt_at = ${warmupAt.toISOString()},
           last_error_code = 'ACCOUNT_WARMUP_WAIT', last_error_type = NULL,
-          last_error_message = 'Aguardando o intervalo do perfil de aquecimento',
+          last_error_message = 'Aguardando o intervalo do ritmo inicial',
           locked_at = NULL, locked_by = NULL, lock_expires_at = NULL`);
         return "warmup_wait" as const;
       }

@@ -67,7 +67,7 @@ export function LoopAccountPicker({
               </span>
               <span className="loop-account-name">@{account.username}</span>
               <AccountWarmupBadge profile={account.warmup_profile} />
-              {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Nova · intervalo 2×</span> : null}
+              {!account.warmup_profile && account.is_new_account ? <span className="new-account-badge">Conta recente</span> : null}
               {isOutside ? (
                 <>
                   <small className="loop-note-off">fora do loop</small>

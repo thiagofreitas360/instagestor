@@ -160,7 +160,7 @@ export async function setAccountsNewStatusAction(formData: FormData) {
   }
   const count = result.changed;
   const text = changingProfile
-    ? (count ? `Perfil atualizado em ${count} ${count === 1 ? "conta" : "contas"}${warmupProfile ? "" : " · aquecimento desativado"}` : "Nenhuma conta precisava ser alterada")
+    ? (count ? `Perfil atualizado em ${count} ${count === 1 ? "conta" : "contas"}${warmupProfile ? "" : " · ritmo inicial desativado"}` : "Nenhuma conta precisava ser alterada")
     : count
     ? `${count} ${count === 1 ? "conta marcada" : "contas marcadas"} como ${isNewAccount ? (count === 1 ? "nova" : "novas") : (count === 1 ? "antiga" : "antigas")}${result.unchanged ? ` · ${result.unchanged} já estavam nessa classificação` : ""}`
     : "Nenhuma conta precisava ser alterada";
@@ -230,11 +230,10 @@ export async function banAccountAction(formData: FormData) {
     await banAccount(accountId, String(formData.get("reason") ?? ""), user.id, user.organizationId);
     revalidatePath("/contas");
     revalidatePath(`/contas/${accountId}`);
-    revalidatePath("/analises/banidas");
   } catch (error) {
     back(`/contas/${accountId}`, error);
   }
-  redirect(`/contas/${accountId}?ok=${encodeURIComponent("Conta marcada como banida")}`);
+  redirect(`/contas/${accountId}?ok=${encodeURIComponent("Conta marcada como suspensa")}`);
 }
 
 export async function unbanAccountAction(formData: FormData) {
@@ -244,11 +243,10 @@ export async function unbanAccountAction(formData: FormData) {
     await unbanAccount(accountId, user.id, user.organizationId);
     revalidatePath("/contas");
     revalidatePath(`/contas/${accountId}`);
-    revalidatePath("/analises/banidas");
   } catch (error) {
     back(`/contas/${accountId}`, error);
   }
-  redirect(`/contas/${accountId}?ok=${encodeURIComponent("Banimento desmarcado; reconecte a conta para voltar a usá-la")}`);
+  redirect(`/contas/${accountId}?ok=${encodeURIComponent("Suspensão removida; reconecte a conta para voltar a usá-la")}`);
 }
 
 export async function createGroupAction(formData: FormData) {

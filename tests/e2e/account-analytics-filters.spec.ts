@@ -58,7 +58,7 @@ test("combina contas não vinculadas, pesquisa e loops nas análises", async ({ 
   await expect(page.locator('#account-classification-form input[name="returnTo"]')).toHaveValue(/filtro=conectadas/);
   await page.getByRole("button", { name: "Selecionar todas as 1 contas deste filtro", exact: true }).click();
   await expect(page.getByText("1 conta selecionada", { exact: true })).toBeVisible();
-  await page.getByRole("combobox", { name: "Perfil de aquecimento", exact: true }).selectOption("FAST");
+  await page.getByRole("combobox", { name: "Ritmo inicial", exact: true }).selectOption("FAST");
   await page.getByRole("button", { name: "Aplicar perfil", exact: true }).click();
   await expect(page).toHaveURL(/vinculo=nao_vinculadas/);
   await expect(page.locator("tbody tr")).toHaveCount(1);

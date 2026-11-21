@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { futureLocalDateTime, login, withE2EDatabase } from "./helpers";
 
-test("não aplica aquecimento por padrão, muda perfis de 50 contas, combina filtros e desliga o aquecimento", async ({ page }, testInfo) => {
+test("não aplica ritmo inicial por padrão, muda perfis de 50 contas, combina filtros e desliga o ritmo inicial", async ({ page }, testInfo) => {
   const prefix = `classificacao_${randomUUID().slice(0, 8)}`;
   const { groupId, firstId } = await withE2EDatabase(async (sql) => {
     const [organization] = await sql<Array<{ id: string }>>`SELECT id FROM organizations WHERE slug = 'instagestor'`;
@@ -23,20 +23,15 @@ test("não aplica aquecimento por padrão, muda perfis de 50 contas, combina fil
   await expect(page.locator(".account-warmup-badge")).toHaveCount(0);
   await page.getByRole("checkbox", { name: "Selecionar todas as 50 contas deste filtro", exact: true }).check();
   await expect(page.getByText("50 contas selecionadas", { exact: true })).toBeVisible();
-  await page.getByRole("combobox", { name: "Perfil de aquecimento", exact: true }).selectOption("FAST");
+  await page.getByRole("combobox", { name: "Ritmo inicial", exact: true }).selectOption("FAST");
   await page.getByRole("button", { name: "Aplicar perfil", exact: true }).click();
   await expect(page.getByText("Perfil atualizado em 50 contas", { exact: true })).toBeVisible();
   await expect(page.locator(".new-account-badge")).toHaveCount(50);
-  await expect(page.getByRole("button", { name: "Aplicar perfil", exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "Selecionar todas as 50 contas deste filtro", exact: true }).click();
-  await page.getByRole("combobox", { name: "Conexão", exact: true }).selectOption("AUTO");
-  await page.getByRole("button", { name: "Aplicar conexão", exact: true }).click();
-  await expect(page.getByText("50 contas marcadas como automáticas", { exact: true })).toBeVisible();
-  await expect(page.locator("tbody tr").filter({ hasText: "· Automática" })).toHaveCount(50);
   await expect(page.getByText("0 contas selecionadas", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Aplicar perfil", exact: true })).toHaveCount(0);
   for (let attempt = 0; attempt < 2; attempt++) {
     await page.getByRole("button", { name: "Selecionar todas as 50 contas deste filtro", exact: true }).click();
-    await page.getByRole("combobox", { name: "Perfil de aquecimento", exact: true }).selectOption("FAST");
+    await page.getByRole("combobox", { name: "Ritmo inicial", exact: true }).selectOption("FAST");
     await page.getByRole("button", { name: "Aplicar perfil", exact: true }).click();
     await expect(page.getByText("Nenhuma conta precisava ser alterada", { exact: true })).toBeVisible();
     await expect(page.getByText("0 contas selecionadas", { exact: true })).toBeVisible();
@@ -55,9 +50,9 @@ test("não aplica aquecimento por padrão, muda perfis de 50 contas, combina fil
   await page.getByRole("button", { name: "Aplicar filtros", exact: true }).click();
   await expect(page.locator("tbody tr")).toHaveCount(10);
   await page.getByRole("button", { name: "Selecionar todas as 10 contas deste filtro", exact: true }).click();
-  await page.getByRole("combobox", { name: "Perfil de aquecimento", exact: true }).selectOption("OFF");
+  await page.getByRole("combobox", { name: "Ritmo inicial", exact: true }).selectOption("OFF");
   await page.getByRole("button", { name: "Aplicar perfil", exact: true }).click();
-  await expect(page.getByText("Perfil atualizado em 10 contas · aquecimento desativado", { exact: true })).toBeVisible();
+  await expect(page.getByText("Perfil atualizado em 10 contas · ritmo inicial desativado", { exact: true })).toBeVisible();
   await expect(page.locator("tbody tr")).toHaveCount(0);
 
   await page.goto(`/contas?busca=${prefix}&tipo=novas`);
@@ -65,9 +60,9 @@ test("não aplica aquecimento por padrão, muda perfis de 50 contas, combina fil
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "Selecionar todas as 40 contas deste filtro", exact: true }).click();
   await page.screenshot({ path: testInfo.outputPath("contas-novas-mobile.png") });
-  await page.getByRole("combobox", { name: "Perfil de aquecimento", exact: true }).selectOption("OFF");
+  await page.getByRole("combobox", { name: "Ritmo inicial", exact: true }).selectOption("OFF");
   await page.getByRole("button", { name: "Aplicar perfil", exact: true }).click();
-  await expect(page.getByText("Perfil atualizado em 40 contas · aquecimento desativado", { exact: true })).toBeVisible();
+  await expect(page.getByText("Perfil atualizado em 40 contas · ritmo inicial desativado", { exact: true })).toBeVisible();
   await expect(page.locator(".new-account-badge")).toHaveCount(0);
   await page.getByRole("combobox", { name: "Tipo de conta", exact: true }).selectOption("antigas");
   await page.getByRole("button", { name: "Aplicar filtros", exact: true }).click();
@@ -92,14 +87,14 @@ test("não aplica aquecimento por padrão, muda perfis de 50 contas, combina fil
   await expect(page.locator("tbody tr")).toHaveCount(0);
 
   await page.goto(`/contas/${firstId}`);
-  await page.getByRole("switch", { name: "Aquecimento automático", exact: true }).check();
-  await page.getByRole("combobox", { name: "Perfil de aquecimento", exact: true }).selectOption("CONSERVATIVE");
-  await page.getByRole("button", { name: "Salvar aquecimento", exact: true }).click();
+  await page.getByRole("switch", { name: "Ritmo inicial automático", exact: true }).check();
+  await page.getByRole("combobox", { name: "Ritmo inicial", exact: true }).selectOption("CONSERVATIVE");
+  await page.getByRole("button", { name: "Salvar ritmo inicial", exact: true }).click();
   await expect(page.getByText("Perfil atualizado em 1 conta", { exact: true })).toBeVisible();
   await expect(page.locator(".new-account-badge")).toHaveCount(1);
   await expect(page.locator(".account-warmup-badge")).toHaveText("Conservador");
-  await page.getByRole("switch", { name: "Aquecimento automático", exact: true }).uncheck();
-  await page.getByRole("button", { name: "Salvar aquecimento", exact: true }).click();
-  await expect(page.getByText("Perfil atualizado em 1 conta · aquecimento desativado", { exact: true })).toBeVisible();
+  await page.getByRole("switch", { name: "Ritmo inicial automático", exact: true }).uncheck();
+  await page.getByRole("button", { name: "Salvar ritmo inicial", exact: true }).click();
+  await expect(page.getByText("Perfil atualizado em 1 conta · ritmo inicial desativado", { exact: true })).toBeVisible();
   await expect(page.locator(".new-account-badge")).toHaveCount(0);
 });
