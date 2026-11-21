@@ -1,0 +1,2 @@
+# Mantém public/ versionado mesmo vazio: o Dockerfile faz COPY /app/public ./public
+# e o build quebra se a pasta não existir. Não remova sem ajustar o Dockerfile.
