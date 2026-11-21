@@ -1,7 +1,5 @@
 import Link from "next/link";
-import { cancelHighlightCheckAction, createFakeAccountsAction, disconnectAccountAction, hideDisconnectedAccountsAction, requestHighlightCheckAction, setAccountsConnectionModeAction, verifyConnectedAccountsAction } from "@/app/actions";
-import { AutoRefresh } from "@/components/auto-refresh";
-import { highlightCheckStatus } from "@/server/highlight-checker";
+import { createFakeAccountsAction, disconnectAccountAction, hideDisconnectedAccountsAction, setAccountsConnectionModeAction, verifyConnectedAccountsAction } from "@/app/actions";
 import { getSqlClient } from "@/db/client";
 import { EmptyState, formatDate, MessageBanner, MetricCard, Panel, StatusBadge, initials } from "@/components/ui";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
@@ -37,9 +35,6 @@ type AccountRow = AccountActivityDates & {
   group_ids: string[];
   meta_app_name: string | null;
   has_loop: boolean;
-  highlight_count: number | null;
-  highlight_checked_at: Date | null;
-  highlight_check_error: string | null;
   hidden_at: Date | null;
   groups: GroupRow[] | string;
 };
@@ -69,7 +64,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const user = await requireAdmin();
   const params = await searchParams;
   const sql = getSqlClient();
-  const [allAccounts, groups, [setting], highlight] = await Promise.all([
+  const [allAccounts, groups, [setting]] = await Promise.all([
     sql<AccountRow[]>`
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.account_type, account.status,
         account.token_expires_at, account.is_new_account, account.warmup_profile, account.connection_mode, account.created_at,
@@ -79,7 +74,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         EXISTS (SELECT 1 FROM loop_accounts linked WHERE linked.organization_id = account.organization_id
           AND linked.instagram_account_id = account.id) AS has_loop,
         account.last_error_at, account.last_error_message,
-        account.highlight_count, account.highlight_checked_at, account.highlight_check_error, account.hidden_at,
+        account.hidden_at,
         account.publishing_limit_usage, account.publishing_limit_total,
         coalesce(array_agg(DISTINCT group_row.name ORDER BY group_row.name)
           FILTER (WHERE group_row.name IS NOT NULL), '{}') AS group_names,
@@ -108,12 +103,10 @@ export default async function AccountsPage({ searchParams }: PageProps) {
     sql<Array<{ default_timezone: string }>>`
       SELECT coalesce((SELECT default_timezone FROM settings WHERE organization_id = ${user.organizationId}), 'America/Sao_Paulo') AS default_timezone
     `,
-    highlightCheckStatus(user.organizationId),
   ]);
   // Ocultadas pelo botão somem da página, mas continuam na estatística de reconexões.
   const hideable = (account: AccountRow) => ["REAUTH_REQUIRED", "DISCONNECTED"].includes(account.status);
   const accounts = allAccounts.filter((account) => !(hideable(account) && account.hidden_at));
-  const highlightPercent = highlight?.run_total ? Math.min(100, Math.round((highlight.done / highlight.run_total) * 100)) : 0;
   const fakeMode = process.env.INSTAGRAM_PROVIDER === "fake"
     && (process.env.NODE_ENV !== "production" || process.env.ALLOW_FAKE_PROVIDER_IN_PRODUCTION === "true");
   const connected = accounts.filter((account) => ["CONNECTED", "TOKEN_EXPIRING"].includes(account.status)).length;
@@ -167,7 +160,6 @@ export default async function AccountsPage({ searchParams }: PageProps) {
     if (selectedFilter === "expirando") return account.status === "TOKEN_EXPIRING";
     if (selectedFilter === "reconectar") return account.status === "REAUTH_REQUIRED";
     if (selectedFilter === "banidas") return account.status === "BANNED";
-    if (selectedFilter === "sem_destaque") return account.highlight_count === 0;
     return true;
   });
   const newCount = matchingAccounts.filter(isNew).length;
@@ -244,13 +236,6 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         <td data-label="Status" className="cell-wrap">
           <StatusBadge status={account.status} />
           {account.token_expires_at ? <small>Token até {formatDate(account.token_expires_at, { dateOnly: true })}</small> : null}
-          {account.highlight_check_error ? (
-            <small className="muted" title={account.highlight_check_error}>Destaque: não deu para conferir</small>
-          ) : account.highlight_count === 0 ? (
-            <span className="highlight-missing-badge" title={`Conferido em ${formatDate(account.highlight_checked_at)}`}>Sem destaque</span>
-          ) : account.highlight_count ? (
-            <small>{account.highlight_count} destaque(s) · {formatDate(account.highlight_checked_at, { dateOnly: true })}</small>
-          ) : null}
           {account.last_error_message ? (
             <small className="error-copy account-last-error" title={account.last_error_message}>
               Último erro: {account.last_error_message}
@@ -315,11 +300,6 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           <form action={verifyConnectedAccountsAction}>
             <button className="button button-secondary" type="submit">Verificar conexões</button>
           </form>
-          {highlight?.running ? null : (
-            <form action={requestHighlightCheckAction}>
-              <button className="button button-secondary" type="submit">Conferir destaques</button>
-            </form>
-          )}
           {hideableCount ? (
             <form action={hideDisconnectedAccountsAction}>
               <span title={`Tirar da lista as ${hideableCount} conta(s) pedindo reconexão ou desconectadas`}>
@@ -337,36 +317,6 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         </div>
       </header>
       <MessageBanner error={first(params.erro)} success={first(params.ok)} />
-      {highlight?.running ? (
-        <Panel title="Conferindo destaques" description="O conferidor no seu PC abre o perfil de cada conta conectada, um por vez.">
-          <div className="form-stack">
-            <AutoRefresh intervalMs={5_000} />
-            <div className="quota-cell highlight-check-progress">
-              <span><strong>{highlight.done} de {highlight.run_total}</strong> contas conferidas{highlight.missing ? ` · ${highlight.missing} sem destaque` : ""}{highlight.failed ? ` · ${highlight.failed} não deu para conferir` : ""}</span>
-              <div className="progress-track" aria-label={`${highlightPercent}% das contas conferidas`}>
-                <div className="progress-value" style={{ width: `${highlightPercent}%` }} />
-              </div>
-            </div>
-            {!highlight.online ? <p className="error-copy">Conferidor desligado. Abra o programa no seu PC: ele começa, ou continua de onde parou.</p>
-              : !highlight.done ? <p className="muted">Aguardando o conferidor começar (até 30 segundos)…</p> : null}
-            <form action={cancelHighlightCheckAction}>
-              <button className="button button-small button-secondary" type="submit">Cancelar conferência</button>
-            </form>
-          </div>
-        </Panel>
-      ) : highlight?.run_finished_at ? (
-        <Panel
-          title="Última conferência de destaques"
-          description={`${formatDate(highlight.run_finished_at)} · ${highlight.done} de ${highlight.run_total} contas conferidas`}
-          action={highlight.missing ? <Link className="button button-small button-secondary" href="/contas?filtro=sem_destaque">Ver contas sem destaque</Link> : undefined}
-        >
-          <p>
-            <strong className={highlight.missing ? "danger-count" : undefined}>{highlight.missing} sem destaque</strong>
-            {highlight.failed ? <span className="muted"> · {highlight.failed} não deu para conferir</span> : null}
-          </p>
-          {highlight.run_error ? <p className="error-copy">{highlight.run_error}</p> : null}
-        </Panel>
-      ) : null}
       {justConnected ? (
         <Panel title={`Como @${justConnected.username} foi conectada?`} description="Informe se a conexão foi manual ou automática. Isso separa as contas nos filtros e na estatística de reconexões.">
           <form className="inline-form" action={setAccountsConnectionModeAction}>
@@ -480,7 +430,6 @@ export default async function AccountsPage({ searchParams }: PageProps) {
           ["expirando", "Expirando"],
           ["reconectar", "Reconectar"],
           ["banidas", "Banidas"],
-          ["sem_destaque", "Sem destaque"],
         ].map(([value, label]) => (
           <Link
             className={`period-chip${selectedFilter === value ? " is-active" : ""}`}

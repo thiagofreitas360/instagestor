@@ -18,7 +18,6 @@ const navigation: NavItem[] = [
   { href: "/analises", label: "Análises", icon: I(<><line x1="3" y1="21" x2="21" y2="21" /><rect x="5" y="10" width="3" height="8" /><rect x="10.5" y="6" width="3" height="12" /><rect x="16" y="13" width="3" height="5" /></>) },
   { href: "/grupos", label: "Grupos", icon: I(<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.5l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z" />) },
   { href: "/midias", label: "Mídias", icon: I(<><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-4.5-4.5L5 21" /></>) },
-  { href: "/downloader", label: "Downloader", icon: I(<><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></>) },
   { href: "/campanhas", label: "Campanhas", icon: I(<><path d="m22 8-6 4 6 4V8Z" /><rect x="2" y="6" width="14" height="12" rx="2" /></>) },
   { href: "/loops", label: "Loops", icon: I(<><path d="m17 2 4 4-4 4" /><path d="M3 11v-1a4 4 0 0 1 4-4h14" /><path d="m7 22-4-4 4-4" /><path d="M21 13v1a4 4 0 0 1-4 4H3" /></>) },
   { href: "/escalas", label: "Escalas", icon: I(<><rect x="3" y="4" width="18" height="18" rx="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></>) },
