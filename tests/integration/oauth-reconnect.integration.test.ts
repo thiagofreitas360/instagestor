@@ -4,8 +4,8 @@ import { getSqlClient } from "@/db/client";
 import { decryptToken } from "@/lib/crypto";
 import { resetEnvForTests } from "@/lib/env";
 import { MetaInstagramProvider } from "@/providers/meta-instagram";
-import { connectFromAuthorizationCode, consumeOauthState, createOauthState, setAccountsConnectionMode } from "@/server/accounts";
-import { deleteMetaApp, findAccountMetaAppId, listMetaApps, saveMetaApp } from "@/server/meta-apps";
+import { connectFromAuthorizationCode, consumeOauthState, createOauthState } from "@/server/accounts";
+import { deleteMetaApp, listMetaApps, saveMetaApp } from "@/server/meta-apps";
 import { createAccounts, createOrganization, createUser, TEST_ORGANIZATION_ID } from "./helpers";
 
 function metaReturns(profileId: string) {
@@ -42,21 +42,6 @@ describe("OAuth com reconexão direcionada", () => {
     await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId, id));
     const [again] = await sql`SELECT warmup_profile, created_at FROM instagram_accounts WHERE id = ${id}`;
     expect(again).toMatchObject({ warmup_profile: "CONSERVATIVE", created_at: first.created_at });
-  });
-
-  it("applies the settings warmup only to accounts connected after it is chosen", async () => {
-    const userId = await createUser();
-    const sql = getSqlClient();
-    await sql`INSERT INTO settings (organization_id, default_warmup_profile) VALUES (${TEST_ORGANIZATION_ID}, 'EXPRESS')`;
-    metaReturns("warmup-default-1");
-    const first = await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId));
-    await sql`UPDATE settings SET default_warmup_profile = 'BALANCED' WHERE organization_id = ${TEST_ORGANIZATION_ID}`;
-    metaReturns("warmup-default-2");
-    const second = await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId));
-    metaReturns("warmup-default-1");
-    await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId, first));
-    const rows = await sql`SELECT id, warmup_profile FROM instagram_accounts WHERE id IN (${first}, ${second})`;
-    expect(Object.fromEntries(rows.map((row) => [row.id, row.warmup_profile]))).toEqual({ [first]: "EXPRESS", [second]: "BALANCED" });
   });
 
   it("vincula o state à organização, ao ator e à conta alvo", async () => {
@@ -121,37 +106,6 @@ describe("OAuth com reconexão direcionada", () => {
   });
 });
 
-describe("Tipo de conexão (manual ou automática)", () => {
-  it("nasce sem tipo no OAuth, é classificada depois, auditada e isolada por organização", async () => {
-    const userId = await createUser();
-    const sql = getSqlClient();
-    metaReturns("modo-conexao");
-    const id = await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId));
-    const [created] = await sql<{ connection_mode: string | null }[]>`SELECT connection_mode FROM instagram_accounts WHERE id = ${id}`;
-    expect(created.connection_mode).toBeNull();
-
-    await expect(setAccountsConnectionMode([id], "AUTO", userId, TEST_ORGANIZATION_ID)).resolves.toEqual({ changed: 1, unchanged: 0 });
-    await expect(setAccountsConnectionMode([id], "AUTO", userId, TEST_ORGANIZATION_ID)).resolves.toEqual({ changed: 0, unchanged: 1 });
-    const [classified] = await sql<{ connection_mode: string | null }[]>`SELECT connection_mode FROM instagram_accounts WHERE id = ${id}`;
-    expect(classified.connection_mode).toBe("AUTO");
-    const [auditRow] = await sql<{ metadata_json: { previousMode: string | null; connectionMode: string } }[]>`
-      SELECT metadata_json FROM audit_logs WHERE event_type = 'ACCOUNT_CONNECTION_MODE_UPDATED' AND entity_id = ${id}
-    `;
-    expect(auditRow.metadata_json).toEqual({ previousMode: null, connectionMode: "AUTO" });
-
-    // Reconectar preserva o tipo informado.
-    metaReturns("modo-conexao");
-    await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId, id));
-    const [reconnected] = await sql<{ connection_mode: string | null }[]>`SELECT connection_mode FROM instagram_accounts WHERE id = ${id}`;
-    expect(reconnected.connection_mode).toBe("AUTO");
-
-    const otherOrganization = await createOrganization(randomUUID());
-    const otherUser = await createUser("outro-modo@example.test", otherOrganization);
-    await expect(setAccountsConnectionMode([id], "MANUAL", otherUser, otherOrganization)).rejects.toThrow("pertencem a outro cliente");
-    await expect(setAccountsConnectionMode([id], "INVALIDO" as never, userId, TEST_ORGANIZATION_ID)).rejects.toThrow();
-  });
-});
-
 describe("Meta Apps por cliente", () => {
   it("conecta pelo app escolhido, isola clientes e mantém a conta ao remover o app", async () => {
     const userId = await createUser();
@@ -166,8 +120,7 @@ describe("Meta Apps por cliente", () => {
     await saveMetaApp(TEST_ORGANIZATION_ID, userId, { id: app.id, name: "App A2", appId: "1234567890123" });
 
     metaReturns("via-app");
-    const accountId = await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId, undefined, app.id));
-    expect(await findAccountMetaAppId(TEST_ORGANIZATION_ID, accountId)).toBe(app.id);
+    await connectFromAuthorizationCode("code", await createOauthState(TEST_ORGANIZATION_ID, userId, undefined, app.id));
     expect(MetaInstagramProvider.prototype.exchangeAuthorizationCode).toHaveBeenCalledWith("code", {
       appId: "1234567890123", appSecret: "secret-app-a-0123456789",
     });

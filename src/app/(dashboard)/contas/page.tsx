@@ -7,6 +7,7 @@ import { EmptyState, formatDate, MessageBanner, MetricCard, Panel, StatusBadge, 
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { AccountGroupSelect } from "@/components/account-group-select";
 import { InstagramConnectButton } from "@/components/instagram-connect-button";
+import { listMetaApps } from "@/server/meta-apps";
 import { AccountBulkSelection } from "@/components/account-bulk-selection";
 import { AccountWarmupBadge } from "@/components/account-warmup-badge";
 import { AccountActivity } from "@/components/account-activity";
@@ -69,7 +70,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
   const user = await requireAdmin();
   const params = await searchParams;
   const sql = getSqlClient();
-  const [allAccounts, groups, [setting], highlight] = await Promise.all([
+  const [allAccounts, groups, [setting], highlight, apps] = await Promise.all([
     sql<AccountRow[]>`
       SELECT account.id, account.username, account.display_name, account.profile_picture_url, account.account_type, account.status,
         account.token_expires_at, account.is_new_account, account.warmup_profile, account.connection_mode, account.created_at,
@@ -109,6 +110,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
       SELECT coalesce((SELECT default_timezone FROM settings WHERE organization_id = ${user.organizationId}), 'America/Sao_Paulo') AS default_timezone
     `,
     highlightCheckStatus(user.organizationId),
+    listMetaApps(user.organizationId),
   ]);
   // Ocultadas pelo botão somem da página, mas continuam na estatística de reconexões.
   const hideable = (account: AccountRow) => ["REAUTH_REQUIRED", "DISCONNECTED"].includes(account.status);
@@ -285,7 +287,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
         </td>
         <td data-label="Ação" className="table-action-column">
           <div className="table-actions">
-            {account.status === "REAUTH_REQUIRED" ? <InstagramConnectButton accountId={account.id} className="button button-small button-primary">Reconectar</InstagramConnectButton> : null}
+            {account.status === "REAUTH_REQUIRED" ? <InstagramConnectButton accountId={account.id} apps={apps} className="button button-small button-primary">Reconectar</InstagramConnectButton> : null}
             <Link className="button button-small button-secondary" href={`/contas/${account.id}`}>Detalhes</Link>
             {!(["DISCONNECTED", "DISABLED", "BANNED"].includes(account.status)) ? (
               <form action={disconnectAccountAction}>
@@ -333,7 +335,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
               Limpar desconectadas
             </button>
           )}
-          <InstagramConnectButton className="button button-primary button-hero">{instagramIcon}Conectar Instagram</InstagramConnectButton>
+          <InstagramConnectButton apps={apps} className="button button-primary button-hero">{instagramIcon}Conectar Instagram</InstagramConnectButton>
         </div>
       </header>
       <MessageBanner error={first(params.erro)} success={first(params.ok)} />
@@ -618,7 +620,7 @@ export default async function AccountsPage({ searchParams }: PageProps) {
               description={accounts.length ? "Escolha outro filtro para ver as demais contas." : "Conecte uma conta profissional do Instagram para começar a publicar."}
               href={accounts.length ? "/contas" : undefined}
               actionLabel={accounts.length ? "Mostrar todas" : undefined}
-              action={<InstagramConnectButton className="button button-secondary">Conectar Instagram</InstagramConnectButton>}
+              action={<InstagramConnectButton apps={apps} className="button button-secondary">Conectar Instagram</InstagramConnectButton>}
             />
           )}
         </div>

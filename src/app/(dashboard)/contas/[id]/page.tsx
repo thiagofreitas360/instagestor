@@ -18,6 +18,7 @@ import {
 import { loadAnalytics, resolvePeriod } from "@/server/analytics";
 import { requireAdmin } from "@/server/auth";
 import { InstagramConnectButton } from "@/components/instagram-connect-button";
+import { listMetaApps } from "@/server/meta-apps";
 import { AccountNewStatusForm, AccountWarmupForm } from "@/components/account-bulk-selection";
 import { AccountWarmupBadge } from "@/components/account-warmup-badge";
 import { accountWarmup, type WarmupProfile } from "@/lib/account-warmup";
@@ -78,7 +79,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
   const user = await requireAdmin();
   const [{ id }, query] = await Promise.all([params, searchParams]);
   const sql = getSqlClient();
-  const [[account], groups, [stats], jobs, [lastPeriod], [setting]] = await Promise.all([
+  const [[account], groups, [stats], jobs, [lastPeriod], [setting], apps] = await Promise.all([
     sql<Account[]>`
       SELECT id, instagram_user_id, username, display_name, profile_picture_url, account_type, status, is_new_account, warmup_profile,
         connection_mode, token_expires_at, token_last_refreshed_at, token_last_checked_at,
@@ -121,6 +122,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
     sql<Array<{ default_timezone: string }>>`
       SELECT coalesce((SELECT default_timezone FROM settings WHERE organization_id = ${user.organizationId}), 'America/Sao_Paulo') AS default_timezone
     `,
+    listMetaApps(user.organizationId),
   ]);
   if (!account) notFound();
   const warmup = accountWarmup(account.warmup_profile, account.created_at);
@@ -147,7 +149,7 @@ export default async function AccountDetailPage({ params, searchParams }: PagePr
         actions={
           <>
             {mustReconnect ? (
-              <InstagramConnectButton accountId={account.id}>Reconectar via Meta</InstagramConnectButton>
+              <InstagramConnectButton accountId={account.id} apps={apps}>Reconectar via Meta</InstagramConnectButton>
             ) : (
               <form action={verifyAccountAction}>
                 <input type="hidden" name="accountId" value={account.id} />
