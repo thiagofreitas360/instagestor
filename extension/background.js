@@ -86,6 +86,7 @@ function startScanFlow(username, rangeFrom, rangeTo, targets = ['reels', 'photos
 const ORIGENS_DO_PAINEL = [
   'https://instagestor.orbih.shop',
   'https://www.instagestor.orbih.shop',
+  'https://redegestor.thautomacoes.shop',
   'http://localhost:3100',
   'http://localhost:3000',
 ];

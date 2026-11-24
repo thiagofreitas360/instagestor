@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "InstaGestor Downloader",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Baixe reels, fotos, stories e destaques do Instagram em ZIP com a conta logada no seu navegador. Integra com o painel do InstaGestor.",
   "author": "InstaGestor",
   "homepage_url": "https://instagestor.orbih.shop",
