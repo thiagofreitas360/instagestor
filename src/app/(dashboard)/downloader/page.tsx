@@ -3,7 +3,7 @@ import { requireAdmin } from "@/server/auth";
 
 export const metadata = { title: "Downloader · InstaGestor" };
 
-const EXT_VERSION = "1.0.0";
+const EXT_VERSION = "1.0.1";
 const EXT_ZIP = "/downloads/instagestor-downloader.zip";
 
 const steps = [
